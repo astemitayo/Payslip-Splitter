@@ -32,19 +32,17 @@ SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
 # ---------------- Auth ----------------
 def authenticate_google_drive():
-    creds = None
-    if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE, "rb") as f:
-            creds = pickle.load(f)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(TOKEN_FILE, "wb") as token:
-            pickle.dump(creds, token)
-    return build("drive", "v3", credentials=creds)
+    # Load credentials JSON from Streamlit Cloud secrets (or environment variable)
+    creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+    
+    # Save creds to a temporary file (since the Google lib requires a file path)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as tmp:
+        tmp.write(json.dumps(creds_dict).encode("utf-8"))
+        tmp_path = tmp.name
+
+    flow = InstalledAppFlow.from_client_secrets_file(tmp_path, SCOPES)
+    creds = flow.run_local_server(port=0)
+    return creds
 
 
 def find_file_in_folder(service, filename, folder_id):
