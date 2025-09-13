@@ -32,16 +32,17 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 
 # ---------------- Auth ----------------
 def authenticate_google_drive():
-    # Load service account credentials from Streamlit secrets
-    service_account_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+    # Load service account info directly from secrets
+    service_account_info = st.secrets["gcp_service_account"]
+
+    # Create credentials object
     creds = service_account.Credentials.from_service_account_info(
         service_account_info, scopes=SCOPES
     )
 
-    # Build the Drive service
+    # Build the Google Drive service
     service = build("drive", "v3", credentials=creds)
     return service
-
 
 def find_file_in_folder(service, filename, folder_id):
     safe_name = filename.replace("'", "\\'")
