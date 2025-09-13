@@ -13,7 +13,7 @@ from PyPDF2 import PdfReader, PdfWriter
 
 # Google auth & Drive
 import pickle
-from google_auth_oauthlib.flow import service_account
+from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
