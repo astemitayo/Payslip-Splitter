@@ -13,7 +13,7 @@ from PyPDF2 import PdfReader, PdfWriter
 
 # Google auth & Drive
 import pickle
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import service_account
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
@@ -27,22 +27,20 @@ PROGRESS_LOG = "progress_log.json"
 SUMMARY_JSON = "Run_Summary.json"
 SUMMARY_CSV = "Run_Summary.csv"
 
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
+SCOPES = ['https://www.googleapis.com/auth/drive']
 
 
 # ---------------- Auth ----------------
 def authenticate_google_drive():
-    # Load credentials JSON from Streamlit Cloud secrets (or environment variable)
-    creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-    
-    # Save creds to a temporary file (since the Google lib requires a file path)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as tmp:
-        tmp.write(json.dumps(creds_dict).encode("utf-8"))
-        tmp_path = tmp.name
+    # Load service account credentials from Streamlit secrets
+    service_account_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+    creds = service_account.Credentials.from_service_account_info(
+        service_account_info, scopes=SCOPES
+    )
 
-    flow = InstalledAppFlow.from_client_secrets_file(tmp_path, SCOPES)
-    creds = flow.run_local_server(port=0)
-    return creds
+    # Build the Drive service
+    service = build("drive", "v3", credentials=creds)
+    return service
 
 
 def find_file_in_folder(service, filename, folder_id):
