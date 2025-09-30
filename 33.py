@@ -138,7 +138,7 @@ def split_and_rename_pdf_webapp(input_pdf_file):
 
 
 st.set_page_config(layout="wide")
-st.title("Payslip PDF Splitter and Renamer")
+st.title("ARMTI Payslip Manager")
 st.markdown("""
 Upload a multi-page PDF containing payslips, and this app will split each page into a separate PDF
 and rename it based on the Year, Month, and IPPIS Number found in the payslip text.
