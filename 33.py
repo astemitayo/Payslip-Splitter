@@ -1,76 +1,85 @@
 import streamlit as st
-import os
 import re
-from PyPDF2 import PdfReader, PdfWriter
 import tempfile
 import zipfile
-import io # Needed for file-like objects for upload
+import io
+from PyPDF2 import PdfReader, PdfWriter
 
-# Google Drive imports
+# Google Drive
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-# --- Configuration for Google Drive ---
-# IMPORTANT: Replace with the actual ID of your Google Drive folder
-# Ensure this folder is within a Google Shared Drive and your service account has editor/contributor access.
+# --- Streamlit Page Config ---
+st.set_page_config(
+    page_title="Payslip Splitter",
+    page_icon="📄",
+    layout="wide"
+)
+
+# --- Custom Styling ---
+st.markdown("""
+<style>
+.main-title {
+    font-size: 2rem;
+    font-weight: bold;
+    color: #2E86C1;
+    text-align: center;
+    margin-bottom: 20px;
+}
+.stButton button {
+    background-color: #2E86C1;
+    color: white;
+    border-radius: 8px;
+    padding: 0.5em 1em;
+    font-weight: bold;
+}
+.stButton button:hover {
+    background-color: #1B4F72;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown('<div class="main-title">📄 Payslip PDF Splitter & Uploader</div>', unsafe_allow_html=True)
+
+# --- Google Drive Config ---
+SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive']
 GOOGLE_DRIVE_FOLDER_ID = st.secrets["google_drive_folder_id"]
-SERVICE_ACCOUNT_FILE = "service_account.json" # Make sure this file is in the same directory
-
-# Scopes define what your app can do on Google Drive
-SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive'] # drive.file for files created by the app, drive for broader access
-
 
 def authenticate_google_drive():
-    """Authenticates with Google Drive using a service account stored in Streamlit secrets."""
+    """Authenticate with Google Drive using Streamlit secrets."""
     try:
         creds = service_account.Credentials.from_service_account_info(
             st.secrets["gcp_service_account"], scopes=SCOPES
         )
-        service = build("drive", "v3", credentials=creds)
-        return service
+        return build("drive", "v3", credentials=creds)
     except Exception as e:
-        st.error(f"Error authenticating with Google Drive: {e}")
-        st.error("Check your Streamlit secrets configuration.")
+        st.error(f"Google Drive authentication failed: {e}")
         return None
 
 def upload_file_to_google_drive(service, filename, file_bytes, mime_type):
-    """Uploads a file to Google Drive."""
-    if not service:
-        st.error("Google Drive service not initialized.")
-        return False
-
-    file_metadata = {
-        'name': filename,
-        'parents': [GOOGLE_DRIVE_FOLDER_ID]
-    }
-    # Add support for Shared Drives if the folder is one
-    # If the folder is a Shared Drive, 'supportsAllDrives' must be set to True
-    # The API will automatically determine if it's a Shared Drive folder
-    # but explicitly setting this can sometimes help.
-    parameters = {'supportsAllDrives': True}
+    """Upload a file to Google Drive."""
+    file_metadata = {"name": filename, "parents": [GOOGLE_DRIVE_FOLDER_ID]}
     media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=True)
     try:
-        # Pass supportsAllDrives parameter for create method
-        file = service.files().create(body=file_metadata, media_body=media, fields='id', **parameters).execute()
-        st.success(f"Uploaded '{filename}' to Google Drive. File ID: {file.get('id')}")
-        return True
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields="id",
+            supportsAllDrives=True
+        ).execute()
+        st.success(f"✅ Uploaded {filename} (ID: {file.get('id')})")
     except Exception as e:
-        st.error(f"Failed to upload '{filename}' to Google Drive: {e}")
-        st.error("Hint: If you see a 'storage quota' error, ensure GOOGLE_DRIVE_FOLDER_ID points to a folder in a Shared Drive and your service account has appropriate permissions.")
-        return False
-
+        st.error(f"❌ Failed to upload {filename}: {e}")
 
 def get_details_from_text(text):
-    """
-    Extracts the Year, Month, and IPPIS Number from the text of a payslip.
-    This version is specifically tailored to your payslip format.
-    """
+    """Extract Year, Month, and IPPIS Number from payslip text."""
     try:
         year_match = re.search(r'\b(20\d{2})\b', text)
         year = year_match.group(1) if year_match else None
 
         month_abbr_match = re.search(r'\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-\d{4}\b', text, re.IGNORECASE)
+        month = None
         if month_abbr_match:
             month_abbr = month_abbr_match.group(1).upper()
             month_map = {
@@ -78,8 +87,6 @@ def get_details_from_text(text):
                 'JUL': '07', 'AUG': '08', 'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'
             }
             month = month_map.get(month_abbr)
-        else:
-            month = None
 
         ippis_match = re.search(r'IPPIS\s*Number:\s*(\w+)', text, re.IGNORECASE)
         ippis_number = ippis_match.group(1) if ippis_match else None
@@ -87,22 +94,16 @@ def get_details_from_text(text):
         if year and month and ippis_number:
             return {'year': year, 'month': month, 'ippis_number': ippis_number}
         return None
-    except Exception as e:
-        st.error(f"An error occurred while extracting details: {e}")
+    except Exception:
         return None
 
-def split_and_rename_pdf_webapp(input_pdf_file):
-    """
-    Splits and renames each page of the PDF for the web app.
-    Returns a list of tuples: (filename, bytes_data) for all processed PDFs
-    and a filtered list containing only successfully named PDFs.
-    """
-    all_processed_files_data = [] # Store (filename, bytes_data) directly for immediate use
-    matched_files_data = [] # Store only successfully named files
-    
+def split_and_rename_pdf(input_pdf_file):
+    """Split and rename PDF pages."""
+    all_processed_files = []
+    matched_files = []
     try:
         reader = PdfReader(input_pdf_file)
-        st.write("Processing PDF...")
+        progress = st.progress(0)
 
         for i, page in enumerate(reader.pages):
             writer = PdfWriter()
@@ -117,25 +118,29 @@ def split_and_rename_pdf_webapp(input_pdf_file):
             else:
                 new_filename = f"page_{i + 1}_missing_details.pdf"
 
-            # Get bytes directly into a buffer
             buffer = io.BytesIO()
             writer.write(buffer)
             buffer.seek(0)
             file_bytes = buffer.read()
-            
-            all_processed_files_data.append((new_filename, file_bytes))
-            if is_matched:
-                matched_files_data.append((new_filename, file_bytes))
-            
-            st.write(f"Processed page {i+1}: {new_filename}")
 
-        st.success("TASK COMPLETE: All pages have been split and renamed.")
-        return all_processed_files_data, matched_files_data
+            all_processed_files.append((new_filename, file_bytes))
+            if is_matched:
+                matched_files.append((new_filename, file_bytes))
+
+            progress.progress((i + 1) / len(reader.pages))
+
+        st.success("✅ All pages processed successfully!")
+        progress.empty()
+        return all_processed_files, matched_files
 
     except Exception as e:
-        st.error(f"An unexpected error occurred during PDF processing: {e}")
+        st.error(f"Error while processing PDF: {e}")
         return [], []
 
+# --- Sidebar Options ---
+st.sidebar.title("⚙️ Options")
+enable_drive_upload = st.sidebar.checkbox("Upload to Google Drive", value=True)
+enable_local_download = st.sidebar.checkbox("Download Locally", value=True)
 
 st.set_page_config(layout="wide")
 st.title("ARMTI Payslip Manager")
@@ -144,79 +149,55 @@ Upload a multi-page PDF containing payslips, and this app will split each page i
 and rename it based on the Year, Month, and IPPIS Number found in the payslip text.
 """)
 
-uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
+# --- Main File Uploader ---
+uploaded_file = st.file_uploader("📂 Upload a PDF containing payslips", type="pdf", help="Drag & drop or click to browse")
 
-if uploaded_file is not None:
-    st.write("File uploaded successfully!")
-    
-    if st.button("Split and Rename Payslips"):
-        # Use a temporary file to save the uploaded PDF
+if uploaded_file:
+    st.success("File uploaded successfully!")
+
+    if st.button("🚀 Split & Process Payslips"):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
             tmp_file_path = tmp_file.name
-        
-        all_processed_pdfs_data, matched_pdfs_data = split_and_rename_pdf_webapp(tmp_file_path)
 
-        if all_processed_pdfs_data:
-            # --- Google Drive Upload Section ---
-            st.subheader("Google Drive Upload:")
-            st.warning("IMPORTANT: Ensure 'GOOGLE_DRIVE_FOLDER_ID' points to a folder within a Google Shared Drive and your service account has at least 'Content Manager' or 'Contributor' permissions to avoid 'storage quota' errors.")
-            google_drive_service = authenticate_google_drive()
-            
-            if google_drive_service:
-                if matched_pdfs_data: # Only show upload options if there are matched files
-                    st.info(f"Found {len(matched_pdfs_data)} files matching the naming pattern for upload.")
-                    
-                    # Removed the radio button, directly proceed with individual uploads
-                    st.info("Uploading individual matched PDF files to Google Drive...")
-                    for filename, file_bytes in matched_pdfs_data: # Use matched_pdfs_data here
-                        upload_file_to_google_drive(google_drive_service, filename, file_bytes, 'application/pdf')
-                else:
-                    st.warning("No files found that matched the naming pattern. Skipping Google Drive upload.")
-            else:
-                st.warning("Google Drive upload skipped due to authentication failure.")
+        all_pdfs, matched_pdfs = split_and_rename_pdf(tmp_file_path)
 
+        if all_pdfs:
+            tab1, tab2 = st.tabs(["☁️ Google Drive Upload", "💻 Local Download"])
 
-            # --- Local Download Section ---
-            st.subheader("Local Downloads:")
-            
-            # Option for downloading only matched files as a single ZIP locally
-            if matched_pdfs_data:
-                st.write("Download only successfully named payslips:")
-                zip_buffer_local_matched = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer_local_matched, 'w', zipfile.ZIP_DEFLATED) as zf:
-                    for filename, file_bytes in matched_pdfs_data:
-                        zf.writestr(filename, file_bytes)
-                zip_buffer_local_matched.seek(0)
-                st.download_button(
-                    label="Download Matched Payslips as ZIP (Local)",
-                    data=zip_buffer_local_matched.read(),
-                    file_name="Matched_Payslips.zip",
-                    mime="application/zip"
-                )
-                zip_buffer_local_matched.close()
-            else:
-                st.info("No files found that matched the naming pattern for local download.")
+            with tab1:
+                if enable_drive_upload:
+                    service = authenticate_google_drive()
+                    if service and matched_pdfs:
+                        st.info(f"Found {len(matched_pdfs)} valid payslips to upload.")
+                        for filename, file_bytes in matched_pdfs:
+                            upload_file_to_google_drive(service, filename, file_bytes, "application/pdf")
+                    elif not matched_pdfs:
+                        st.warning("No valid payslips found for upload.")
 
-            # Option for downloading ALL processed files (including those with missing details)
-            if all_processed_pdfs_data:
-                st.markdown("---") # Separator
-                st.write("Download ALL processed files (including those with 'missing_details'):")
-                zip_buffer_local_all = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer_local_all, 'w', zipfile.ZIP_DEFLATED) as zf:
-                    for filename, file_bytes in all_processed_pdfs_data:
-                        zf.writestr(filename, file_bytes)
-                zip_buffer_local_all.seek(0)
-                st.download_button(
-                    label="Download All Processed Payslips as ZIP (Local)",
-                    data=zip_buffer_local_all.read(),
-                    file_name="All_Processed_Payslips.zip",
-                    mime="application/zip"
-                )
-                zip_buffer_local_all.close()
+            with tab2:
+                if enable_local_download:
+                    if matched_pdfs:
+                        zip_buffer = io.BytesIO()
+                        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                            for filename, file_bytes in matched_pdfs:
+                                zf.writestr(filename, file_bytes)
+                        zip_buffer.seek(0)
+                        st.download_button(
+                            "⬇️ Download Matched Payslips (ZIP)",
+                            data=zip_buffer,
+                            file_name="Matched_Payslips.zip",
+                            mime="application/zip"
+                        )
 
-        # Clean up the temporary uploaded file
-        os.remove(tmp_file_path)
-
-st.sidebar.header("About")
-st.sidebar.info("This app uses Python and Streamlit to automate payslip processing and optionally upload to Google Drive.")
+                    zip_buffer_all = io.BytesIO()
+                    with zipfile.ZipFile(zip_buffer_all, "w", zipfile.ZIP_DEFLATED) as zf:
+                        for filename, file_bytes in all_pdfs:
+                            zf.writestr(filename, file_bytes)
+                    zip_buffer_all.seek(0)
+                    st.download_button(
+                        "⬇️ Download All Processed Payslips (ZIP)",
+                        data=zip_buffer_all,
+                        file_name="All_Processed_Payslips.zip",
+                        mime="application/zip"
+                    )
