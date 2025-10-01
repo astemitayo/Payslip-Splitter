@@ -268,7 +268,7 @@ if uploaded_file:
                     if service and matched_pdfs:
                         st.info(f"Found {len(matched_pdfs)} valid payslips to upload.")
 
-                        # --- Duplicate skip log ---
+                                                # --- Duplicate skip log (by identity, not filename) ---
                         UPLOAD_LOG = "uploaded_files.json"
                         if os.path.exists(UPLOAD_LOG):
                             with open(UPLOAD_LOG, "r") as f:
@@ -278,8 +278,15 @@ if uploaded_file:
 
                         # --- Initialize status table ---
                         status_data = []
-                        for fname, _ in matched_pdfs:
-                            if fname in uploaded_files:
+                        for fname, file_bytes in matched_pdfs:
+                            # Extract details again from filename
+                            details = re.match(r"(\d{4})[ _-](\d{2})[ _-](\w+)", fname)
+                            if details:
+                                key = f"{details.group(1)}_{details.group(2)}_{details.group(3)}"
+                            else:
+                                key = fname  # fallback
+
+                            if key in uploaded_files:
                                 status_data.append({"filename": fname, "status": "⏩ Skipped"})
                             else:
                                 status_data.append({"filename": fname, "status": "⏳ Pending"})
@@ -292,26 +299,20 @@ if uploaded_file:
                         completed = 0
                         new_uploads = 0
 
-                        def upload_with_retry_local(svc, fname, fbytes, attempts=3):
-                            import time
-                            last_exc = None
-                            for attempt in range(1, attempts + 1):
-                                try:
-                                    upload_file_to_google_drive(svc, fname, fbytes)
-                                    return True
-                                except Exception as exc:
-                                    last_exc = exc
-                                    if attempt == attempts:
-                                        raise
-                                    time.sleep(2 ** attempt)
-                            raise last_exc
-
                         for filename, file_bytes in matched_pdfs:
-                            if filename in uploaded_files:
+                            # Build identity key
+                            details = re.match(r"(\d{4})[ _-](\d{2})[ _-](\w+)", filename)
+                            if details:
+                                key = f"{details.group(1)}_{details.group(2)}_{details.group(3)}"
+                            else:
+                                key = filename  # fallback
+
+                            if key in uploaded_files:
                                 completed += 1
                                 progress_bar.progress(completed / total)
                                 continue
 
+                            # Mark as uploading
                             for row in status_data:
                                 if row["filename"] == filename:
                                     row["status"] = "🔄 Uploading"
@@ -319,12 +320,12 @@ if uploaded_file:
                             status_placeholder.table(status_data)
 
                             try:
-                                upload_with_retry_local(service, filename, file_bytes)
+                                upload_file_to_google_drive(service, filename, file_bytes)
                                 for row in status_data:
                                     if row["filename"] == filename:
                                         row["status"] = "✅ Uploaded"
                                         break
-                                uploaded_files.add(filename)
+                                uploaded_files.add(key)
                                 new_uploads += 1
                             except Exception as e:
                                 for row in status_data:
@@ -336,12 +337,12 @@ if uploaded_file:
                             progress_bar.progress(completed / total)
                             status_placeholder.table(status_data)
 
+                        # Save updated log
                         with open(UPLOAD_LOG, "w") as f:
                             json.dump(list(uploaded_files), f)
 
                         st.info(f"Upload complete. {new_uploads} new files uploaded, {len(matched_pdfs)-new_uploads} skipped.")
-                    elif not matched_pdfs:
-                        st.warning("No valid payslips found for upload.")
+
 
             with tab2:
                 if st.session_state.user_prefs["enable_local_download"]:
