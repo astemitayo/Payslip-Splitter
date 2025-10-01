@@ -220,27 +220,79 @@ if uploaded_file:
                         else:
                             uploaded_files = set()
 
+                        # --- Initialize status table ---
+                        status_data = []
+                        for fname, _ in matched_pdfs:
+                            if fname in uploaded_files:
+                                status_data.append({"filename": fname, "status": "⏩ Skipped"})
+                            else:
+                                status_data.append({"filename": fname, "status": "⏳ Pending"})
+
+                        status_placeholder = st.empty()
+                        status_placeholder.table(status_data)
+                        progress_bar = st.progress(0)
+
+                        total = len(matched_pdfs)
+                        completed = 0
                         new_uploads = 0
+
+                        # local retry helper (simple exponential backoff)
+                        def upload_with_retry_local(svc, fname, fbytes, attempts=3):
+                            import time
+                            last_exc = None
+                            for attempt in range(1, attempts + 1):
+                                try:
+                                    upload_file_to_google_drive(svc, fname, fbytes, "application/pdf")
+                                    return True
+                                except Exception as exc:
+                                    last_exc = exc
+                                    if attempt == attempts:
+                                        raise
+                                    # backoff: 2s, 4s, 8s...
+                                    time.sleep(2 ** attempt)
+                            raise last_exc
+
                         for filename, file_bytes in matched_pdfs:
                             if filename in uploaded_files:
-                                st.warning(f"⏩ Skipped {filename} (already uploaded)")
-                                continue  # skip duplicate
+                                # Already marked skipped in table
+                                completed += 1
+                                progress_bar.progress(completed / total)
+                                continue
+
+                            # Update to uploading
+                            for row in status_data:
+                                if row["filename"] == filename:
+                                    row["status"] = "🔄 Uploading"
+                                    break
+                            status_placeholder.table(status_data)
 
                             try:
-                                upload_file_to_google_drive(service, filename, file_bytes, "application/pdf")
+                                upload_with_retry_local(service, filename, file_bytes)
+                                # mark uploaded
+                                for row in status_data:
+                                    if row["filename"] == filename:
+                                        row["status"] = "✅ Uploaded"
+                                        break
                                 uploaded_files.add(filename)
                                 new_uploads += 1
-                                st.success(f"✅ Uploaded {filename}")
                             except Exception as e:
-                                st.error(f"❌ Failed to upload {filename}: {e}")
+                                for row in status_data:
+                                    if row["filename"] == filename:
+                                        row["status"] = f"❌ Failed ({e})"
+                                        break
+
+                            completed += 1
+                            progress_bar.progress(completed / total)
+                            status_placeholder.table(status_data)
 
                         # save updated log
                         with open(UPLOAD_LOG, "w") as f:
                             json.dump(list(uploaded_files), f)
 
                         st.info(f"Upload complete. {new_uploads} new files uploaded, {len(matched_pdfs)-new_uploads} skipped.")
-                    elif not matched_pdfs:  # This 'elif' should be aligned with its corresponding 'if'
+                    elif not matched_pdfs:
                         st.warning("No valid payslips found for upload.")
+
             with tab2:
                 if enable_local_download:
                     if matched_pdfs:
