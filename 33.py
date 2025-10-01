@@ -203,65 +203,64 @@ if uploaded_file:
         if all_pdfs:
             tab1, tab2 = st.tabs(["☁️ Google Drive Upload", "💻 Local Download"])
 
-with tab1:
-    if enable_drive_upload:
-        service = authenticate_google_drive()
-        if service and matched_pdfs:
-            st.info(f"Found {len(matched_pdfs)} valid payslips to upload.")
+            with tab1:
+                if enable_drive_upload:
+                    service = authenticate_google_drive()
+                    if service and matched_pdfs:
+                        st.info(f"Found {len(matched_pdfs)} valid payslips to upload.")
 
-            # --- Duplicate skip log ---
-            UPLOAD_LOG = "uploaded_files.json"
-            if os.path.exists(UPLOAD_LOG):
-                with open(UPLOAD_LOG, "r") as f:
-                    uploaded_files = set(json.load(f))
-            else:
-                uploaded_files = set()
+                        # --- Duplicate skip log ---
+                        UPLOAD_LOG = "uploaded_files.json"
+                        if os.path.exists(UPLOAD_LOG):
+                            with open(UPLOAD_LOG, "r") as f:
+                                uploaded_files = set(json.load(f))
+                        else:
+                            uploaded_files = set()
 
-            new_uploads = 0
-            for filename, file_bytes in matched_pdfs:
-                if filename in uploaded_files:
-                    st.warning(f"⏩ Skipped {filename} (already uploaded)")
-                    continue  # skip duplicate
+                        new_uploads = 0
+                        for filename, file_bytes in matched_pdfs:
+                            if filename in uploaded_files:
+                                st.warning(f"⏩ Skipped {filename} (already uploaded)")
+                                continue  # skip duplicate
 
-                try:
-                    upload_file_to_google_drive(service, filename, file_bytes, "application/pdf")
-                    uploaded_files.add(filename)
-                    new_uploads += 1
-                    st.success(f"✅ Uploaded {filename}")
-                except Exception as e:
-                    st.error(f"❌ Failed to upload {filename}: {e}")
+                            try:
+                                upload_file_to_google_drive(service, filename, file_bytes, "application/pdf")
+                                uploaded_files.add(filename)
+                                new_uploads += 1
+                                st.success(f"✅ Uploaded {filename}")
+                            except Exception as e:
+                                st.error(f"❌ Failed to upload {filename}: {e}")
 
-            # save updated log
-            with open(UPLOAD_LOG, "w") as f:
-                json.dump(list(uploaded_files), f)
+                        # save updated log
+                        with open(UPLOAD_LOG, "w") as f:
+                            json.dump(list(uploaded_files), f)
 
-            st.info(f"Upload complete. {new_uploads} new files uploaded, {len(matched_pdfs)-new_uploads} skipped.")
-        elif not matched_pdfs:
-            st.warning("No valid payslips found for upload.")
+                        st.info(f"Upload complete. {new_uploads} new files uploaded, {len(matched_pdfs)-new_uploads} skipped.")
+                    elif not matched_pdfs:  # This 'elif' should be aligned with its corresponding 'if'
+                        st.warning("No valid payslips found for upload.")
+            with tab2:
+                if enable_local_download:
+                    if matched_pdfs:
+                        zip_buffer = io.BytesIO()
+                        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                            for filename, file_bytes in matched_pdfs:
+                                zf.writestr(filename, file_bytes)
+                        zip_buffer.seek(0)
+                        st.download_button(
+                            "⬇️ Download Matched Payslips (ZIP)",
+                            data=zip_buffer,
+                            file_name="Matched_Payslips.zip",
+                            mime="application/zip"
+                        )
 
-with tab2:
-    if enable_local_download:
-        if matched_pdfs:
-            zip_buffer = io.BytesIO()
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                for filename, file_bytes in matched_pdfs:
-                    zf.writestr(filename, file_bytes)
-            zip_buffer.seek(0)
-            st.download_button(
-                "⬇️ Download Matched Payslips (ZIP)",
-                data=zip_buffer,
-                file_name="Matched_Payslips.zip",
-                mime="application/zip"
-            )
-
-        zip_buffer_all = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer_all, "w", zipfile.ZIP_DEFLATED) as zf:
-            for filename, file_bytes in all_pdfs:
-                zf.writestr(filename, file_bytes)
-        zip_buffer_all.seek(0)
-        st.download_button(
-            "⬇️ Download All Processed Payslips (ZIP)",
-            data=zip_buffer_all,
-            file_name="All_Processed_Payslips.zip",
-            mime="application/zip"
-        )
+                    zip_buffer_all = io.BytesIO()
+                    with zipfile.ZipFile(zip_buffer_all, "w", zipfile.ZIP_DEFLATED) as zf:
+                        for filename, file_bytes in all_pdfs:
+                            zf.writestr(filename, file_bytes)
+                    zip_buffer_all.seek(0)
+                    st.download_button(
+                        "⬇️ Download All Processed Payslips (ZIP)",
+                        data=zip_buffer_all,
+                        file_name="All_Processed_Payslips.zip",
+                        mime="application/zip"
+                    )
