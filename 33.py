@@ -12,8 +12,8 @@ from googleapiclient.http import MediaIoBaseUpload
 
 # --- Streamlit Page Config ---
 st.set_page_config(
-    page_title="Payslip Splitter",
-    page_icon="📄",
+    page_title="ARMTI Payslip Portal",
+    page_icon="assets/ARMTI.jpeg",
     layout="wide"
 )
 
@@ -40,7 +40,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-title">📄 Payslip PDF Splitter & Uploader</div>', unsafe_allow_html=True)
+st.markdown(
+    """
+    <div style="text-align:center; margin-bottom:20px;">
+        <img src="assets/ARMTI.jpeg" width="100"><br>
+        <span style="font-size:2rem; font-weight:bold; color:#2E86C1;">
+            Payslip PDF Splitter & Uploader
+        </span>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
 
 # --- Google Drive Config ---
 SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive']
@@ -143,7 +154,7 @@ enable_drive_upload = st.sidebar.checkbox("Upload to Google Drive", value=True)
 enable_local_download = st.sidebar.checkbox("Download Locally", value=True)
 
 st.set_page_config(layout="wide")
-st.title("ARMTI Payslip Manager")
+st.title("ARMTI PAYSLIP MANAGER")
 st.markdown("""
 Upload a multi-page PDF containing payslips, and this app will split each page into a separate PDF
 and rename it based on the Year, Month, and IPPIS Number found in the payslip text.
@@ -200,4 +211,4 @@ if uploaded_file:
                         data=zip_buffer_all,
                         file_name="All_Processed_Payslips.zip",
                         mime="application/zip"
-                    )
+                    )git status
