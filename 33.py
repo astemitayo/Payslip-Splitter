@@ -350,12 +350,13 @@ if uploaded_file:
                         st.info(f"Upload complete. {new_uploads} new files uploaded, {len(matched_pdfs)-new_uploads} skipped.")
 
 
-            with tab2:
+                        with tab2:
                 if st.session_state.user_prefs["enable_local_download"]:
-                    if matched_pdfs:
+                    if matched_pdfs_with_keys: # Use the new variable name
                         zip_buffer = io.BytesIO()
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                            for filename, file_bytes in matched_pdfs:
+                            # Corrected iteration: we need the filename from the tuple
+                            for key, filename, file_bytes in matched_pdfs_with_keys:
                                 zf.writestr(filename, file_bytes)
                         zip_buffer.seek(0)
                         st.download_button(
@@ -365,9 +366,11 @@ if uploaded_file:
                             mime="application/zip"
                         )
 
+                    # For "Download All Processed Payslips" as well
                     zip_buffer_all = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer_all, "w", zipfile.ZIP_DEFLATED) as zf:
-                        for filename, file_bytes in all_pdfs:
+                        # Corrected iteration: we need the filename from the tuple
+                        for key, filename, file_bytes in all_pdfs_with_keys:
                             zf.writestr(filename, file_bytes)
                     zip_buffer_all.seek(0)
                     st.download_button(
