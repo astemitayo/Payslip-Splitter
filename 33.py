@@ -204,12 +204,41 @@ if uploaded_file:
             tab1, tab2 = st.tabs(["☁️ Google Drive Upload", "💻 Local Download"])
 
             with tab1:
-                if enable_drive_upload:
-                    service = authenticate_google_drive()
-                    if service and matched_pdfs:
-                        st.info(f"Found {len(matched_pdfs)} valid payslips to upload.")
-                        for filename, file_bytes in matched_pdfs:
-                            upload_file_to_google_drive(service, filename, file_bytes, "application/pdf")
+    if enable_drive_upload:
+        service = authenticate_google_drive()
+        if service and matched_pdfs:
+            st.info(f"Found {len(matched_pdfs)} valid payslips to upload.")
+
+            # --- Duplicate skip log ---
+            UPLOAD_LOG = "uploaded_files.json"
+            if os.path.exists(UPLOAD_LOG):
+                with open(UPLOAD_LOG, "r") as f:
+                    uploaded_files = set(json.load(f))
+            else:
+                uploaded_files = set()
+
+            new_uploads = 0
+            for filename, file_bytes in matched_pdfs:
+                if filename in uploaded_files:
+                    st.warning(f"⏩ Skipped {filename} (already uploaded)")
+                    continue  # skip duplicate
+
+                try:
+                    upload_file_to_google_drive(service, filename, file_bytes, "application/pdf")
+                    uploaded_files.add(filename)
+                    new_uploads += 1
+                    st.success(f"✅ Uploaded {filename}")
+                except Exception as e:
+                    st.error(f"❌ Failed to upload {filename}: {e}")
+
+            # save updated log
+            with open(UPLOAD_LOG, "w") as f:
+                json.dump(list(uploaded_files), f)
+
+            st.info(f"Upload complete. {new_uploads} new files uploaded, {len(matched_pdfs)-new_uploads} skipped.")
+        elif not matched_pdfs:
+            st.warning("No valid payslips found for upload.")
+
                     elif not matched_pdfs:
                         st.warning("No valid payslips found for upload.")
 
