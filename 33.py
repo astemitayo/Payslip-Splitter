@@ -271,51 +271,44 @@ if uploaded_file:
             with tab1:
                 if st.session_state.user_prefs["enable_drive_upload"]:
                     service = authenticate_google_drive()
-                    if service and matched_pdfs:
-                        st.info(f"Found {len(matched_pdfs)} valid payslips to upload.")
+                    if service and matched_pdfs_with_keys: # Ensure you're using matched_pdfs_with_keys
+                        st.info(f"Found {len(matched_pdfs_with_keys)} potential payslips to upload.")
 
-                                                # --- Duplicate skip log (by identity, not filename) ---
                         UPLOAD_LOG = "uploaded_files.json"
                         if os.path.exists(UPLOAD_LOG):
                             with open(UPLOAD_LOG, "r") as f:
-                                uploaded_files = set(json.load(f))
+                                uploaded_file_keys = set(json.load(f))
                         else:
-                            uploaded_files = set()
+                            uploaded_file_keys = set()
 
                         # --- Initialize status table ---
                         status_data = []
-                        for fname, file_bytes in matched_pdfs:
-                            # Extract details again from filename
-                            details = re.match(r"(\d{4})[ _-](\d{2})[ _-](\w+)", fname)
-                            if details:
-                                key = f"{details.group(1)}_{details.group(2)}_{details.group(3)}"
+                        # Corrected: Iterate over (key, filename, file_bytes)
+                        for key, filename, file_bytes in matched_pdfs_with_keys:
+                            if key in uploaded_file_keys:
+                                status_data.append({"filename": filename, "status": "⏩ Skipped"})
                             else:
-                                key = fname  # fallback
-
-                            if key in uploaded_files:
-                                status_data.append({"filename": fname, "status": "⏩ Skipped"})
-                            else:
-                                status_data.append({"filename": fname, "status": "⏳ Pending"})
+                                status_data.append({"filename": filename, "status": "⏳ Pending"})
 
                         status_placeholder = st.empty()
                         status_placeholder.table(status_data)
                         progress_bar = st.progress(0)
 
-                        total = len(matched_pdfs)
+                        total = len(matched_pdfs_with_keys)
                         completed = 0
                         new_uploads = 0
 
-                        for filename, file_bytes in matched_pdfs:
-                            # Build identity key
-                            details = re.match(r"(\d{4})[ _-](\d{2})[ _-](\w+)", filename)
-                            if details:
-                                key = f"{details.group(1)}_{details.group(2)}_{details.group(3)}"
-                            else:
-                                key = filename  # fallback
-
-                            if key in uploaded_files:
+                        # The main upload loop, which I believe was already corrected
+                        for key, filename, file_bytes in matched_pdfs_with_keys:
+                            if key in uploaded_file_keys:
                                 completed += 1
                                 progress_bar.progress(completed / total)
+                                # Update status table for skipped items already marked pending
+                                for row in status_data:
+                                    if row["filename"] == filename and row["status"] == "⏳ Pending":
+                                        row["status"] = "⏩ Skipped" # Mark it explicitly as skipped
+                                        break
+                                status_placeholder.table(status_data)
                                 continue
 
                             # Mark as uploading
@@ -331,7 +324,7 @@ if uploaded_file:
                                     if row["filename"] == filename:
                                         row["status"] = "✅ Uploaded"
                                         break
-                                uploaded_files.add(key)
+                                uploaded_file_keys.add(key)
                                 new_uploads += 1
                             except Exception as e:
                                 for row in status_data:
@@ -343,11 +336,10 @@ if uploaded_file:
                             progress_bar.progress(completed / total)
                             status_placeholder.table(status_data)
 
-                        # Save updated log
                         with open(UPLOAD_LOG, "w") as f:
-                            json.dump(list(uploaded_files), f)
+                            json.dump(list(uploaded_file_keys), f)
 
-                        st.info(f"Upload complete. {new_uploads} new files uploaded, {len(matched_pdfs)-new_uploads} skipped.")
+                        st.info(f"Upload complete. {new_uploads} new files uploaded, {total - new_uploads} skipped.")
 
 
             with tab2:
