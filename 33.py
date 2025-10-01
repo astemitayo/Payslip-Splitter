@@ -40,31 +40,38 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Show ARMTI logo
-st.image("assets/ARMTI.png", width=120)
+import base64
 
-# --- Custom Header with ARMTI Logo and Title ---
+# Convert logo to base64 so HTML <img> works
+def get_base64_of_bin_file(bin_file):
+    with open(bin_file, 'rb') as f:
+        data = f.read()
+    return base64.b64encode(data).decode()
+
+logo_base64 = get_base64_of_bin_file("assets/ARMTI.png")
+
 st.markdown(
-    """
+    f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Cocon:wght@700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@700&display=swap');
 
-    .app-title {
-        font-family: 'Cocon', sans-serif;
+    .app-title {{
+        font-family: 'Montserrat', sans-serif;
         color: #2E86C1;
         font-size: 2.2rem;
         font-weight: bold;
         margin: 0;
-    }
+    }}
     </style>
 
     <div style="text-align:center; margin-bottom:25px;">
-        <img src="assets/ARMTI.png" width="120" style="margin-bottom:10px;">
+        <img src="data:image/png;base64,{logo_base64}" width="120" style="margin-bottom:10px;">
         <h1 class="app-title">ARMTI PAYSLIP Manager</h1>
     </div>
     """,
     unsafe_allow_html=True
 )
+
 
 
 
