@@ -6,5 +6,7 @@ venv/
 credentials.json
 *.pdf
 *.json
+user_prefs.json
+
 
 
