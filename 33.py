@@ -8,6 +8,61 @@ import tempfile
 import base64
 from PyPDF2 import PdfReader, PdfWriter
 
+# --- Persistent User Preferences ---
+import json
+
+PREF_FILE = "user_prefs.json"
+
+# Load preferences if file exists
+if "user_prefs" not in st.session_state:
+    if os.path.exists(PREF_FILE):
+        with open(PREF_FILE, "r") as f:
+            st.session_state.user_prefs = json.load(f)
+    else:
+        # Default preferences
+        st.session_state.user_prefs = {
+            "drive_folder": "your-default-folder-id",
+            "enable_drive_upload": True,
+            "enable_local_download": True,
+            "naming_pattern": "{year}_{month}_{ippis}.pdf",
+            "timezone": "Africa/Lagos",
+            "date_format": "YYYY-MM-DD"
+        }
+
+# Sidebar UI bound to session_state
+st.sidebar.header("⚙️ Settings")
+
+st.session_state.user_prefs["drive_folder"] = st.sidebar.text_input(
+    "Google Drive Folder ID", value=st.session_state.user_prefs["drive_folder"]
+)
+
+st.session_state.user_prefs["enable_drive_upload"] = st.sidebar.checkbox(
+    "Upload to Google Drive", value=st.session_state.user_prefs["enable_drive_upload"]
+)
+
+st.session_state.user_prefs["enable_local_download"] = st.sidebar.checkbox(
+    "Enable local download (ZIP)", value=st.session_state.user_prefs["enable_local_download"]
+)
+
+st.session_state.user_prefs["naming_pattern"] = st.sidebar.text_input(
+    "File naming pattern", value=st.session_state.user_prefs["naming_pattern"],
+    help="Use placeholders: {year}, {month}, {ippis}"
+)
+
+st.session_state.user_prefs["timezone"] = st.sidebar.selectbox(
+    "Timezone", ["Africa/Lagos", "UTC", "Europe/London"],
+    index=["Africa/Lagos", "UTC", "Europe/London"].index(st.session_state.user_prefs["timezone"])
+)
+
+st.session_state.user_prefs["date_format"] = st.sidebar.radio(
+    "Date format", ["YYYY-MM-DD", "DD/MM/YYYY", "MM-YYYY"],
+    index=["YYYY-MM-DD", "DD/MM/YYYY", "MM-YYYY"].index(st.session_state.user_prefs["date_format"])
+)
+
+# Save preferences immediately
+with open(PREF_FILE, "w") as f:
+    json.dump(st.session_state.user_prefs, f)
+
 # Google Drive
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
