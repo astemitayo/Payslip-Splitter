@@ -13,7 +13,7 @@ from googleapiclient.http import MediaIoBaseUpload
 # --- Streamlit Page Config ---
 st.set_page_config(
     page_title="ARMTI Payslip Portal",
-    page_icon="assets/ARMTI.jpeg",
+    page_icon="assets/ARMTI.png",
     layout="wide"
 )
 
@@ -42,15 +42,16 @@ st.markdown("""
 
 st.markdown(
     """
-    <div style="text-align:center; margin-bottom:20px;">
-        <img src="assets/ARMTI.jpeg" width="100"><br>
-        <span style="font-size:2rem; font-weight:bold; color:#2E86C1;">
-            Payslip PDF Splitter & Uploader
-        </span>
+    <div style="text-align:center; margin-bottom:25px;">
+        <img src="assets/ARMTI.png" width="120" style="margin-bottom:10px;">
+        <h1 style="color:#2E86C1; font-size:2rem; font-weight:bold; margin:0;">
+            ARMTI
+        </h1>
     </div>
     """,
     unsafe_allow_html=True
 )
+
 
 
 # --- Google Drive Config ---
