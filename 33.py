@@ -8,69 +8,6 @@ import tempfile
 import base64
 from PyPDF2 import PdfReader, PdfWriter
 
-# --- Persistent User Preferences ---
-PREF_FILE = "user_prefs.json"
-
-# Load preferences if file exists
-if "user_prefs" not in st.session_state:
-    if os.path.exists(PREF_FILE):
-        with open(PREF_FILE, "r") as f:
-            st.session_state.user_prefs = json.load(f)
-    else:
-        # Default preferences
-        st.session_state.user_prefs = {
-            "drive_folder": "your-default-folder-id",
-            "enable_drive_upload": True,
-            "enable_local_download": True,
-            "naming_pattern": "{year}_{month}_{ippis}.pdf",
-            "timezone": "Africa/Lagos",
-            "date_format": "YYYY-MM-DD"
-        }
-
-# Sidebar UI bound to session_state
-st.sidebar.header("⚙️ Settings")
-
-st.session_state.user_prefs["drive_folder"] = st.sidebar.text_input(
-    "Google Drive Folder ID",
-    value=st.session_state.user_prefs["drive_folder"],
-    key="drive_folder"
-)
-
-st.session_state.user_prefs["enable_drive_upload"] = st.sidebar.checkbox(
-    "Upload to Google Drive",
-    value=st.session_state.user_prefs["enable_drive_upload"],
-    key="enable_drive_upload"
-)
-
-st.session_state.user_prefs["enable_local_download"] = st.sidebar.checkbox(
-    "Enable local download (ZIP)",
-    value=st.session_state.user_prefs["enable_local_download"],
-    key="enable_local_download"
-)
-
-st.session_state.user_prefs["naming_pattern"] = st.sidebar.text_input(
-    "File naming pattern",
-    value=st.session_state.user_prefs["naming_pattern"],
-    help="Use placeholders: {year}, {month}, {ippis}",
-    key="naming_pattern"
-)
-
-st.session_state.user_prefs["timezone"] = st.sidebar.selectbox(
-    "Timezone", ["Africa/Lagos", "UTC", "Europe/London"],
-    index=["Africa/Lagos", "UTC", "Europe/London"].index(st.session_state.user_prefs["timezone"]),
-    key="timezone"
-)
-
-st.session_state.user_prefs["date_format"] = st.sidebar.radio(
-    "Date format", ["YYYY-MM-DD", "DD/MM/YYYY", "MM-YYYY"],
-    index=["YYYY-MM-DD", "DD/MM/YYYY", "MM-YYYY"].index(st.session_state.user_prefs["date_format"]),
-    key="date_format"
-)
-
-# Save preferences immediately
-with open(PREF_FILE, "w") as f:
-    json.dump(st.session_state.user_prefs, f)
-
 # Google Drive
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -105,6 +42,8 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
+
+import base64
 
 # Convert logo to base64 so it embeds cleanly
 def get_base64_of_bin_file(bin_file):
@@ -143,6 +82,8 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+
+
 # --- Google Drive Config ---
 SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive']
 GOOGLE_DRIVE_FOLDER_ID = st.secrets["google_drive_folder_id"]
@@ -158,7 +99,7 @@ def authenticate_google_drive():
         st.error(f"Google Drive authentication failed: {e}")
         return None
 
-def upload_file_to_google_drive(service, filename, file_bytes, mime_type="application/pdf"):
+def upload_file_to_google_drive(service, filename, file_bytes, mime_type):
     """Upload a file to Google Drive."""
     file_metadata = {"name": filename, "parents": [GOOGLE_DRIVE_FOLDER_ID]}
     media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=True)
@@ -214,9 +155,7 @@ def split_and_rename_pdf(input_pdf_file):
 
             is_matched = False
             if details:
-                new_filename = st.session_state.user_prefs["naming_pattern"].format(
-                    year=details["year"], month=details["month"], ippis=details["ippis_number"]
-                )
+                new_filename = f"{details['year']} {details['month']} {details['ippis_number']}.pdf"
                 is_matched = True
             else:
                 new_filename = f"page_{i + 1}_missing_details.pdf"
@@ -240,7 +179,12 @@ def split_and_rename_pdf(input_pdf_file):
         st.error(f"Error while processing PDF: {e}")
         return [], []
 
-# --- Instructions ---
+# --- Sidebar Options ---
+st.sidebar.title("⚙️ Options")
+enable_drive_upload = st.sidebar.checkbox("Upload to Google Drive", value=True)
+enable_local_download = st.sidebar.checkbox("Download Locally", value=True)
+
+st.set_page_config(layout="wide")
 st.markdown("""
 Upload a multi-page PDF containing payslips, and this app will split each page into a separate PDF
 and rename it based on the Year, Month, and IPPIS Number found in the payslip text.
@@ -263,12 +207,12 @@ if uploaded_file:
             tab1, tab2 = st.tabs(["☁️ Google Drive Upload", "💻 Local Download"])
 
             with tab1:
-                if st.session_state.user_prefs["enable_drive_upload"]:
+                if enable_drive_upload:
                     service = authenticate_google_drive()
                     if service and matched_pdfs:
                         st.info(f"Found {len(matched_pdfs)} valid payslips to upload.")
 
-                                                # --- Duplicate skip log (by identity, not filename) ---
+                        # --- Duplicate skip log ---
                         UPLOAD_LOG = "uploaded_files.json"
                         if os.path.exists(UPLOAD_LOG):
                             with open(UPLOAD_LOG, "r") as f:
@@ -278,15 +222,8 @@ if uploaded_file:
 
                         # --- Initialize status table ---
                         status_data = []
-                        for fname, file_bytes in matched_pdfs:
-                            # Extract details again from filename
-                            details = re.match(r"(\d{4})[ _-](\d{2})[ _-](\w+)", fname)
-                            if details:
-                                key = f"{details.group(1)}_{details.group(2)}_{details.group(3)}"
-                            else:
-                                key = fname  # fallback
-
-                            if key in uploaded_files:
+                        for fname, _ in matched_pdfs:
+                            if fname in uploaded_files:
                                 status_data.append({"filename": fname, "status": "⏩ Skipped"})
                             else:
                                 status_data.append({"filename": fname, "status": "⏳ Pending"})
@@ -299,20 +236,30 @@ if uploaded_file:
                         completed = 0
                         new_uploads = 0
 
-                        for filename, file_bytes in matched_pdfs:
-                            # Build identity key
-                            details = re.match(r"(\d{4})[ _-](\d{2})[ _-](\w+)", filename)
-                            if details:
-                                key = f"{details.group(1)}_{details.group(2)}_{details.group(3)}"
-                            else:
-                                key = filename  # fallback
+                        # local retry helper (simple exponential backoff)
+                        def upload_with_retry_local(svc, fname, fbytes, attempts=3):
+                            import time
+                            last_exc = None
+                            for attempt in range(1, attempts + 1):
+                                try:
+                                    upload_file_to_google_drive(svc, fname, fbytes, "application/pdf")
+                                    return True
+                                except Exception as exc:
+                                    last_exc = exc
+                                    if attempt == attempts:
+                                        raise
+                                    # backoff: 2s, 4s, 8s...
+                                    time.sleep(2 ** attempt)
+                            raise last_exc
 
-                            if key in uploaded_files:
+                        for filename, file_bytes in matched_pdfs:
+                            if filename in uploaded_files:
+                                # Already marked skipped in table
                                 completed += 1
                                 progress_bar.progress(completed / total)
                                 continue
 
-                            # Mark as uploading
+                            # Update to uploading
                             for row in status_data:
                                 if row["filename"] == filename:
                                     row["status"] = "🔄 Uploading"
@@ -320,12 +267,13 @@ if uploaded_file:
                             status_placeholder.table(status_data)
 
                             try:
-                                upload_file_to_google_drive(service, filename, file_bytes)
+                                upload_with_retry_local(service, filename, file_bytes)
+                                # mark uploaded
                                 for row in status_data:
                                     if row["filename"] == filename:
                                         row["status"] = "✅ Uploaded"
                                         break
-                                uploaded_files.add(key)
+                                uploaded_files.add(filename)
                                 new_uploads += 1
                             except Exception as e:
                                 for row in status_data:
@@ -337,15 +285,16 @@ if uploaded_file:
                             progress_bar.progress(completed / total)
                             status_placeholder.table(status_data)
 
-                        # Save updated log
+                        # save updated log
                         with open(UPLOAD_LOG, "w") as f:
                             json.dump(list(uploaded_files), f)
 
                         st.info(f"Upload complete. {new_uploads} new files uploaded, {len(matched_pdfs)-new_uploads} skipped.")
-
+                    elif not matched_pdfs:
+                        st.warning("No valid payslips found for upload.")
 
             with tab2:
-                if st.session_state.user_prefs["enable_local_download"]:
+                if enable_local_download:
                     if matched_pdfs:
                         zip_buffer = io.BytesIO()
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
