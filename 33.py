@@ -43,12 +43,25 @@ st.markdown("""
 # Show ARMTI logo
 st.image("assets/ARMTI.png", width=120)
 
-# Show app title below the logo
+# --- Custom Header with ARMTI Logo and Title ---
 st.markdown(
     """
-    <h1 style="text-align:center; color:#2E86C1; font-size:2rem; font-weight:bold; margin-top:0;">
-        ARMTI PAYSLIP MANAGER
-    </h1>
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Cocon:wght@700&display=swap');
+
+    .app-title {
+        font-family: 'Cocon', sans-serif;
+        color: #2E86C1;
+        font-size: 2.2rem;
+        font-weight: bold;
+        margin: 0;
+    }
+    </style>
+
+    <div style="text-align:center; margin-bottom:25px;">
+        <img src="assets/ARMTI.png" width="120" style="margin-bottom:10px;">
+        <h1 class="app-title">ARMTI PAYSLIP Manager</h1>
+    </div>
     """,
     unsafe_allow_html=True
 )
