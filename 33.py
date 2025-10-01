@@ -394,15 +394,15 @@ if uploaded_file:
                     else: # service is None or matched_pdfs_with_keys is empty
                         st.info("No valid payslips found with extractable details for upload, or no files to upload.")
 
-# --- Debug: Inspect current upload log ---
-if os.path.exists("uploaded_files.json"):
-    try:
-        with open("uploaded_files.json", "r") as f:
-            uploaded_debug = json.load(f)
-        st.sidebar.subheader("📂 Debug: Uploaded File Keys")
-        st.sidebar.write(uploaded_debug)  # shows the raw list of identity keys
-    except Exception as e:
-        st.sidebar.error(f"Failed to read upload log: {e}")
+            # --- Debug: Inspect current upload log ---
+            if os.path.exists("uploaded_files.json"):
+                try:
+                    with open("uploaded_files.json", "r") as f:
+                        uploaded_debug = json.load(f)
+                    st.sidebar.subheader("📂 Debug: Uploaded File Keys")
+                    st.sidebar.write(uploaded_debug)  # shows the raw list of identity keys
+                except Exception as e:
+                    st.sidebar.error(f"Failed to read upload log: {e}")
 
 
             with tab2:
