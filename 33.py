@@ -42,7 +42,7 @@ st.markdown("""
 
 import base64
 
-# Convert logo to base64 so HTML <img> works
+# Convert logo to base64 so it embeds cleanly
 def get_base64_of_bin_file(bin_file):
     with open(bin_file, 'rb') as f:
         data = f.read()
@@ -58,20 +58,26 @@ st.markdown(
     .app-title {{
         font-family: 'Montserrat', sans-serif;
         color: #2E86C1;
-        font-size: 2.2rem;
+        font-size: 2.4rem;
         font-weight: bold;
         margin: 0;
+        padding: 0;
+    }}
+
+    .top-banner {{
+        text-align: center;
+        margin-top: -40px; /* moves everything up */
+        margin-bottom: 15px;
     }}
     </style>
 
-    <div style="text-align:center; margin-bottom:25px;">
-        <img src="data:image/png;base64,{logo_base64}" width="120" style="margin-bottom:10px;">
-        <h1 class="app-title">ARMTI PAYSLIP Manager</h1>
+    <div class="top-banner">
+        <img src="data:image/png;base64,{logo_base64}" width="110" style="margin-bottom:8px;">
+        <h1 class="app-title">ARMTI PAYSLIP MANAGER</h1>
     </div>
     """,
     unsafe_allow_html=True
 )
-
 
 
 
@@ -176,7 +182,6 @@ enable_drive_upload = st.sidebar.checkbox("Upload to Google Drive", value=True)
 enable_local_download = st.sidebar.checkbox("Download Locally", value=True)
 
 st.set_page_config(layout="wide")
-st.title("Payslip PDF Splitter & Uploader")
 st.markdown("""
 Upload a multi-page PDF containing payslips, and this app will split each page into a separate PDF
 and rename it based on the Year, Month, and IPPIS Number found in the payslip text.
