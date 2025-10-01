@@ -292,7 +292,6 @@ if uploaded_file:
                         st.info(f"Upload complete. {new_uploads} new files uploaded, {len(matched_pdfs)-new_uploads} skipped.")
                     elif not matched_pdfs:
                         st.warning("No valid payslips found for upload.")
-
             with tab2:
                 if enable_local_download:
                     if matched_pdfs:
