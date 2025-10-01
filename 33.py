@@ -40,14 +40,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Show ARMTI logo
+st.image("assets/ARMTI.png", width=120)
+
+# Show app title below the logo
 st.markdown(
     """
-    <div style="text-align:center; margin-bottom:25px;">
-        <img src="assets/ARMTI.png" width="120" style="margin-bottom:10px;">
-        <h1 style="color:#2E86C1; font-size:2rem; font-weight:bold; margin:0;">
-            ARMTI
-        </h1>
-    </div>
+    <h1 style="text-align:center; color:#2E86C1; font-size:2rem; font-weight:bold; margin-top:0;">
+        ARMTI PAYSLIP MANAGER
+    </h1>
     """,
     unsafe_allow_html=True
 )
@@ -155,7 +156,7 @@ enable_drive_upload = st.sidebar.checkbox("Upload to Google Drive", value=True)
 enable_local_download = st.sidebar.checkbox("Download Locally", value=True)
 
 st.set_page_config(layout="wide")
-st.title("ARMTI PAYSLIP MANAGER")
+st.title("Payslip PDF Splitter & Uploader")
 st.markdown("""
 Upload a multi-page PDF containing payslips, and this app will split each page into a separate PDF
 and rename it based on the Year, Month, and IPPIS Number found in the payslip text.
