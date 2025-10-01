@@ -204,7 +204,7 @@ if uploaded_file:
             tab1, tab2 = st.tabs(["☁️ Google Drive Upload", "💻 Local Download"])
 
             with tab1:
-    if enable_drive_upload:
+                if enable_drive_upload:
         service = authenticate_google_drive()
         if service and matched_pdfs:
             st.info(f"Found {len(matched_pdfs)} valid payslips to upload.")
