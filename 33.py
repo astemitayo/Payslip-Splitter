@@ -394,30 +394,55 @@ if uploaded_file:
                     else: # service is None or matched_pdfs_with_keys is empty
                         st.info("No valid payslips found with extractable details for upload, or no files to upload.")
 
-            # --- Maintenance: Upload Log ---
-            st.sidebar.markdown("---")
-            st.sidebar.subheader("🛠 Upload Log Maintenance")
 
-            # Reset upload log
-            if st.sidebar.button("🗑 Reset Upload Log"):
-                try:
-                    with open("uploaded_files.json", "w") as f:
-                        json.dump([], f)
-                    st.sidebar.success("Upload log has been reset. All files will upload fresh on next run.")
-                except Exception as e:
-                    st.sidebar.error(f"Failed to reset log: {e}")
+            # --- Admin Authentication ---
+            st.sidebar.markdown("### 🔐 Admin Login")
+            admin_pw = st.sidebar.text_input("Enter admin password", type="password")
 
-            # View current upload log
-            if os.path.exists("uploaded_files.json"):
-                if st.sidebar.checkbox("📂 Show Upload Log"):
+            # Compare with secret in .streamlit/secrets.toml
+            is_admin = admin_pw == st.secrets.get("admin_password", "")
+
+            if is_admin:
+                st.sidebar.success("✅ Admin access granted")
+
+                # --- Maintenance: Upload Log ---
+                st.sidebar.markdown("---")
+                st.sidebar.subheader("🛠 Upload Log Maintenance")
+
+                # Reset upload log
+                if st.sidebar.button("🗑 Reset Upload Log"):
+                    try:
+                        with open("uploaded_files.json", "w") as f:
+                            json.dump([], f)
+                        st.sidebar.success("Upload log has been reset. All files will upload fresh on next run.")
+                    except Exception as e:
+                        st.sidebar.error(f"Failed to reset log: {e}")
+
+                # View current upload log
+                if os.path.exists("uploaded_files.json"):
                     try:
                         with open("uploaded_files.json", "r") as f:
                             uploaded_debug = json.load(f)
-                        st.sidebar.json(uploaded_debug)
+
+                        # Show count
+                        st.sidebar.info(f"📊 {len(uploaded_debug)} files currently logged as uploaded.")
+
+                        # Optional toggle to view full list
+                        if st.sidebar.checkbox("📂 Show Upload Log", key="show_upload_log"):
+                            if all(isinstance(entry, str) for entry in uploaded_debug):
+                                st.sidebar.write(uploaded_debug)
+                            elif all(isinstance(entry, dict) for entry in uploaded_debug):
+                                st.sidebar.table(uploaded_debug)
+                            else:
+                                st.sidebar.json(uploaded_debug)
+
                     except Exception as e:
                         st.sidebar.error(f"Failed to read upload log: {e}")
+                else:
+                    st.sidebar.info("No upload log found yet.")
+
             else:
-                st.sidebar.info("No upload log found yet.")
+                st.sidebar.info("👤 Standard user mode (Admin tools hidden)")
 
 
             with tab2:
