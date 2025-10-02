@@ -394,15 +394,30 @@ if uploaded_file:
                     else: # service is None or matched_pdfs_with_keys is empty
                         st.info("No valid payslips found with extractable details for upload, or no files to upload.")
 
-            # --- Debug: Inspect current upload log ---
-            if os.path.exists("uploaded_files.json"):
+            # --- Maintenance: Upload Log ---
+            st.sidebar.markdown("---")
+            st.sidebar.subheader("🛠 Upload Log Maintenance")
+
+            # Reset upload log
+            if st.sidebar.button("🗑 Reset Upload Log"):
                 try:
-                    with open("uploaded_files.json", "r") as f:
-                        uploaded_debug = json.load(f)
-                    st.sidebar.subheader("📂 Debug: Uploaded File Keys")
-                    st.sidebar.write(uploaded_debug)  # shows the raw list of identity keys
+                    with open("uploaded_files.json", "w") as f:
+                        json.dump([], f)
+                    st.sidebar.success("Upload log has been reset. All files will upload fresh on next run.")
                 except Exception as e:
-                    st.sidebar.error(f"Failed to read upload log: {e}")
+                    st.sidebar.error(f"Failed to reset log: {e}")
+
+            # View current upload log
+            if os.path.exists("uploaded_files.json"):
+                if st.sidebar.checkbox("📂 Show Upload Log"):
+                    try:
+                        with open("uploaded_files.json", "r") as f:
+                            uploaded_debug = json.load(f)
+                        st.sidebar.json(uploaded_debug)
+                    except Exception as e:
+                        st.sidebar.error(f"Failed to read upload log: {e}")
+            else:
+                st.sidebar.info("No upload log found yet.")
 
 
             with tab2:
