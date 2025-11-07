@@ -16,7 +16,8 @@ os.makedirs(output_folder, exist_ok=True)
 
 # --- Step 1: Convert all pages to images and OCR them ---
 print("🔍 Performing OCR on PDF pages (memory-safe mode)...")
-reader = PdfReader(input_pdf)
+reader = PdfReader(io.BytesIO(input_pdf.read()))
+
 page_count = len(reader.pages)
 
 ocr_texts = []
