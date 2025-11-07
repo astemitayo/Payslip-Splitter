@@ -1,5 +1,9 @@
 streamlit
 PyPDF2
+streamlit
+PyPDF2
+pdf2image
+pytesseract
 google-auth
 google-auth-oauthlib
 google-api-python-client
