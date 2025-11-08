@@ -75,18 +75,6 @@ st.session_state.user_prefs["naming_pattern"] = st.sidebar.text_input(
     key="naming_pattern"
 )
 
-st.session_state.user_prefs["timezone"] = st.sidebar.selectbox(
-    "Timezone", ["Africa/Lagos", "UTC", "Europe/London"],
-    index=["Africa/Lagos", "UTC", "Europe/London"].index(st.session_state.user_prefs["timezone"]),
-    key="timezone"
-)
-
-st.session_state.user_prefs["date_format"] = st.sidebar.radio(
-    "Date format", ["YYYY-MM-DD", "DD/MM/YYYY", "MM-YYYY"],
-    index=["YYYY-MM-DD", "DD/MM/YYYY", "MM-YYYY"].index(st.session_state.user_prefs["date_format"]),
-    key="date_format"
-)
-
 st.session_state.user_prefs["ocr_mode"] = st.sidebar.selectbox(
     "OCR Mode",
     options=["Normal", "Hybrid", "Full OCR"],
@@ -390,8 +378,7 @@ def split_and_rename_pdf_with_modes(input_pdf_bytes, ocr_mode="Hybrid", naming_p
 # -----------------------------
 st.markdown("""
 Upload a multi-page PDF containing payslips. The app can:
-- split single-page payslips,
-- group multi-page payslips (detected via markers),
+- split single-page payslips, - group multi-page payslips (detected via markers),
 - use OCR (full/hybrid) for scanned PDFs,
 - allow review and selective upload to Google Drive and/or provide ZIP downloads.
 """)
