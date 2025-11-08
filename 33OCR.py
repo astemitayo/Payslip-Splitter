@@ -176,71 +176,62 @@ def get_details_from_text(text):
     text_upper = text.upper()
     details = {}
 
-    # 1. Look for IPPIS number more robustly
-    # Prioritize 'IPPIS Number: XXXXXX'
-    ippis_match_1 = re.search(r'IPPIS\s*Number[:\-]?\s*(\d{6,10})', text, re.IGNORECASE)
-    if ippis_match_1:
-        details['ippis_number'] = ippis_match_1.group(1)
-    else:
-        # Fallback to a generic 6-10 digit number that might be IPPIS,
-        # but only if it's somewhat isolated or prominent.
-        # This can be tricky and might pick up other numbers.
-        # Let's try to make it more context-aware if possible,
-        # e.g., numbers near "STAFF ID", "EMPLOYEE NO", etc.
-        # For now, keep it broad but understand its limitations.
-        ippis_match_2 = re.search(r'(?<!\d)(\d{6,10})(?!\d)', text) # Ensures it's not part of a larger number
-        if ippis_match_2:
-            details['ippis_number'] = ippis_match_2.group(1)
+   # --- Step 3: Extract info and save each payslip ---
+month_map = {
+    'JANUARY': '01', 'FEBRUARY': '02', 'MARCH': '03', 'APRIL': '04',
+    'MAY': '05', 'JUNE': '06', 'JULY': '07', 'AUGUST': '08',
+    'SEPTEMBER': '09', 'OCTOBER': '10', 'NOVEMBER': '11', 'DECEMBER': '12'
+}
 
+for idx, group in enumerate(payslip_groups, start=1):
+    writer = PdfWriter()
+    merged_text = ""
 
-    # 2. Look for Month and Year
-    # Prioritize Month-YYYY or Month YYYY patterns
-    month_map_abbr = {
-        'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04', 'MAY': '05', 'JUN': '06',
-        'JUL': '07', 'AUG': '08', 'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'
-    }
-    month_map_full = {
-        'JANUARY': '01', 'FEBRUARY': '02', 'MARCH': '03', 'APRIL': '04', 'MAY': '05', 'JUNE': '06',
-        'JULY': '07', 'AUGUST': '08', 'SEPTEMBER': '09', 'OCTOBER': '10', 'NOVEMBER': '11', 'DECEMBER': '12'
-    }
+    for pg in group:
+        writer.add_page(reader.pages[pg])
+        merged_text += ocr_texts[pg] + "\n"
 
-    # Pattern 1: MMM-YYYY or MONTH YYYY (e.g., OCT-2023, October 2023)
-    date_match_1 = re.search(r'\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[-\s](20\d{2})\b', text_upper)
-    date_match_2 = re.search(r'\b(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+(20\d{2})\b', text_upper)
+    # --- Extract metadata ---
+    year_match = re.search(r'\b(20\d{2})\b', merged_text)
+    month_match = re.search(
+        r'\b(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\b',
+        merged_text, re.IGNORECASE
+    )
 
-    month_str, year_str = None, None
+    # --- Robust IPPIS detection ---
+    ippis_match = None
+    m1 = re.search(r'IPPIS\s*Number[:\-]?\s*(\d{3,})', merged_text, re.IGNORECASE)
+    m2 = re.search(r'(\d{3,})\s*Step', merged_text, re.IGNORECASE)
+    m3 = re.search(r'FGN\s+CIVIL\s+SERVICE.*?(\d{5,6})', merged_text, re.IGNORECASE | re.DOTALL)
+    m4 = re.search(r'FEDERAL\s+GOVERNMENT.*?(\d{5,6})', merged_text, re.IGNORECASE | re.DOTALL)
+    m5 = re.search(r'\b(\d{6})\b', merged_text)
 
-    if date_match_1:
-        month_str = date_match_1.group(1)
-        year_str = date_match_1.group(2)
-        details['month'] = month_map_abbr.get(month_str, None)
-        details['year'] = year_str
-    elif date_match_2:
-        month_str = date_match_2.group(1)
-        year_str = date_match_2.group(2)
-        details['month'] = month_map_full.get(month_str, None)
-        details['year'] = year_str
-    else:
-        # Fallback: Try to find a year and then look for a month near it.
-        # This is less reliable but can catch some cases.
-        year_match = re.search(r'\b(20\d{2})\b', text)
-        if year_match:
-            details['year'] = year_match.group(1)
-            # Try to find a month name anywhere in the text if year is found
-            for m_full, m_num in month_map_full.items():
-                if m_full in text_upper:
-                    details['month'] = m_num
-                    break
-            if not details.get('month'): # If full month not found, try abbr
-                 for m_abbr, m_num in month_map_abbr.items():
-                    if m_abbr in text_upper:
-                        details['month'] = m_num
-                        break
+    ippis_match = m1 or m2 or m3 or m4 or m5
 
-    # Ensure both year, month, and IPPIS are found for a valid payslip match
-    if 'year' in details and 'month' in details and 'ippis_number' in details:
-        return details
-    return None
+    total_net_match = re.search(
+        r'Total\s+Net\s+Earnings[:\-]?\s*N?([\d,]+\.\d{2})',
+        merged_text, re.IGNORECASE
+    )
+
+    year = year_match.group(1) if year_match else "UnknownYear"
+    month = month_map.get(month_match.group(1).upper(), "00") if month_match else "00"
+    ippis = ippis_match.group(1) if ippis_match else f"UnknownIPPIS{idx}"
+
+    # --- Filename format: YYYY MM IPPISNUMBER ---
+    base_filename = f"{year} {month} {ippis}"
+    filename = f"{base_filename}.pdf"
+    filepath = os.path.join(output_folder, filename)
+
+    # Ensure uniqueness
+    counter = 1
+    while os.path.exists(filepath):
+        filename = f"{base_filename} {counter}.pdf"
+        filepath = os.path.join(output_folder, filename)
+        counter += 1
+
+    # --- Write the individual payslip ---
+    with open(filepath, "wb") as f:
+        writer.write(f)
 
 
 def group_pages_by_payslip_from_texts(texts):
