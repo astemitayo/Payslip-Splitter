@@ -201,38 +201,31 @@ def get_details_from_text(merged_text, group_idx):
 # -----------------------------
 # OCR / Non-OCR extraction functions - Mostly kept the same for modularity
 # -----------------------------
-def extract_text_from_pdf_non_ocr(reader):
-    texts = []
-    for page in reader.pages:
-        try:
-            texts.append(page.extract_text() or "")
-        except Exception:
-            texts.append("")
-    return texts
-
-def extract_text_page_ocr(pdf_bytes, page_index):
-    images = convert_from_bytes(pdf_bytes, dpi=150, first_page=page_index + 1, last_page=page_index + 1)
-    if not images:
-        return ""
-    return pytesseract.image_to_string(images[0])
-
-def extract_all_pages_ocr(pdf_bytes):
-    # This function is now crucial for the "Full OCR" mode.
-    # It converts all pages to images and then OCRs them one by one,
-    # similar to your local script's Step 1.
+def extract_all_pages_ocr(pdf_bytes, num_pages_total): # Added num_pages_total for context
+    """
+    Performs full OCR on all pages, providing detailed progress updates.
+    """
     reader = PdfReader(io.BytesIO(pdf_bytes))
-    num_pages = len(reader.pages)
     
     ocr_texts = []
-    for i in range(num_pages):
-        # Convert only one page at a time to control memory use on Streamlit Cloud
-        # No poppler_path needed if poppler-utils is in PATH
+    
+    # Initialize Streamlit progress bar for OCR
+    ocr_progress_bar = st.progress(0, text=f"Performing Full OCR on {num_pages_total} pages...")
+    
+    for i in range(num_pages_total): # Use num_pages_total passed from main function
+        # Convert only one page at a time to control memory use
         pages = convert_from_bytes(pdf_bytes, dpi=150, first_page=i + 1, last_page=i + 1)
-        if pages: # Ensure page was converted
+        if pages:
             text = pytesseract.image_to_string(pages[0])
             ocr_texts.append(text)
         else:
             ocr_texts.append("") # Append empty if conversion fails for a page
+        
+        # Update progress bar
+        progress_percentage = (i + 1) / num_pages_total
+        ocr_progress_bar.progress(progress_percentage, text=f"Performing Full OCR: Page {i + 1}/{num_pages_total}")
+        
+    ocr_progress_bar.empty() # Clear the progress bar after completion
     return ocr_texts
 
 
@@ -281,7 +274,7 @@ def group_pages_by_payslip_from_texts(ocr_texts, pdf_num_pages):
 # -----------------------------
 # Main splitting function (hybrid support)
 # -----------------------------
-@st.cache_data(show_spinner="Processing PDF pages...")
+@st.cache_data(show_spinner=False) # Changed to False, as we'll manage progress explicitly
 def split_and_rename_pdf_with_modes(input_pdf_bytes, ocr_mode="Hybrid", naming_pattern="{year} {month} {ippis}"):
     """
     input_pdf_bytes: bytes of the pdf file
@@ -294,21 +287,24 @@ def split_and_rename_pdf_with_modes(input_pdf_bytes, ocr_mode="Hybrid", naming_p
         reader = PdfReader(io.BytesIO(input_pdf_bytes))
         num_pages = len(reader.pages)
         
-        # Build page_texts according to mode
         page_texts = []
-        st.toast(f"Extracting text from {num_pages} page(s) in {ocr_mode} mode...", icon="📄")
-
+        
         if ocr_mode == "Full OCR":
-            # Direct full OCR as in your working script
-            page_texts = extract_all_pages_ocr(input_pdf_bytes)
+            # Direct full OCR, now with detailed progress
+            page_texts = extract_all_pages_ocr(input_pdf_bytes, num_pages) # Pass num_pages
         else:
-            # Use Hybrid or Normal logic as before
+            # Existing Hybrid or Normal logic
+            processing_message = f"Extracting text from {num_pages} page(s) in {ocr_mode} mode..."
+            st.toast(processing_message, icon="📄") # Still use toast for initial message
+
+            text_extraction_progress = st.progress(0, text=processing_message)
+
             non_ocr_texts = extract_text_from_pdf_non_ocr(reader)
             if ocr_mode == "Normal":
                 page_texts = non_ocr_texts
             else:  # Hybrid
                 for i, txt in enumerate(non_ocr_texts):
-                    if txt and len(txt.strip()) >= 60: # Threshold for considering non-OCR text "useful"
+                    if txt and len(txt.strip()) >= 60:
                         page_texts.append(txt)
                     else:
                         try:
@@ -317,47 +313,54 @@ def split_and_rename_pdf_with_modes(input_pdf_bytes, ocr_mode="Hybrid", naming_p
                         except Exception as e:
                             st.warning(f"OCR fallback failed for page {i+1}: {e}")
                             page_texts.append(txt or "") # Use non-OCR if OCR fails
+                    
+                    # Update progress for Hybrid/Normal
+                    progress_percentage = (i + 1) / num_pages
+                    text_extraction_progress.progress(progress_percentage, text=f"{processing_message} (Page {i+1}/{num_pages})")
+            text_extraction_progress.empty() # Clear after completion
+
 
         # Group pages based on the extracted texts
-        # Note: group_pages_by_payslip_from_texts expects ocr_texts now, which is `page_texts` here
         page_groups = group_pages_by_payslip_from_texts(page_texts, num_pages)
 
         st.toast(f"Found {len(page_groups)} potential payslip documents after grouping.", icon="✂️")
 
+        # Progress bar for processing individual payslip groups
+        payslip_processing_progress = st.progress(0, text=f"Processing {len(page_groups)} payslip documents...")
+
         for g_index, group in enumerate(page_groups, start=1):
             writer = PdfWriter()
             merged_text = ""
-            for pg_idx in group: # pg_idx is the 0-based page number
+            for pg_idx in group:
                 writer.add_page(reader.pages[pg_idx])
                 merged_text += (page_texts[pg_idx] or "") + "\n"
 
-            details = get_details_from_text(merged_text, g_index) # Pass g_index for potential fallback filename
+            details = get_details_from_text(merged_text, g_index)
 
             payslip_info = {
-                'key': None, # Unique identifier for tracking
+                'key': None,
                 'filename': None,
                 'file_bytes': None,
                 'year': None,
                 'month': None,
                 'ippis': None,
-                'status': 'Details not found', # Initial status
-                'selected_for_upload': False # New field for selection
+                'status': 'Details not found',
+                'selected_for_upload': False
             }
 
             if details:
                 payslip_info['year'] = details["year"]
                 payslip_info['month'] = details["month"]
                 payslip_info['ippis'] = details["ippis_number"]
-                # Use a more robust key to ensure uniqueness: year_month_ippis_groupindex
                 payslip_info['key'] = f"{details['year']}_{details['month']}_{details['ippis_number']}_{g_index}"
                 payslip_info['filename'] = naming_pattern.format(year=details["year"], month=details["month"], ippis=details["ippis_number"])
                 if not payslip_info['filename'].lower().endswith(".pdf"):
                     payslip_info['filename'] += ".pdf"
                 payslip_info['status'] = "Details Extracted"
             else:
-                payslip_info['key'] = f"no_details_group_{g_index}_from_uploaded_pdf" # More generic if details missing
+                payslip_info['key'] = f"no_details_group_{g_index}_from_uploaded_pdf"
                 payslip_info['filename'] = f"Payslip_Group_{g_index}_missing_details.pdf"
-                payslip_info['status'] = "Details Missing" # Updated status
+                payslip_info['status'] = "Details Missing"
 
             buf = io.BytesIO()
             writer.write(buf)
@@ -365,6 +368,10 @@ def split_and_rename_pdf_with_modes(input_pdf_bytes, ocr_mode="Hybrid", naming_p
             payslip_info['file_bytes'] = buf.read()
             processed_payslips_data.append(payslip_info)
             
+            # Update payslip processing progress
+            payslip_processing_progress.progress(g_index / len(page_groups), text=f"Processing payslip {g_index}/{len(page_groups)}")
+
+        payslip_processing_progress.empty() # Clear after completion
         st.success("✅ All pages processed successfully!")
         return processed_payslips_data
 
