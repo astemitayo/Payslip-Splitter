@@ -168,6 +168,24 @@ def upload_file_to_google_drive(service, filename, file_bytes, mime_type="applic
 # -----------------------------
 # Text/detail extraction utils
 # -----------------------------
+# --- Step 1: Convert all pages to images and OCR them ---
+print("🔍 Performing OCR on PDF pages (memory-safe mode)...")
+reader = PdfReader(input_pdf)
+page_count = len(reader.pages)
+
+ocr_texts = []
+for i in range(page_count):
+    # Convert only one page at a time to control memory use
+    pages = convert_from_path(
+        input_pdf, dpi=150, first_page=i + 1, last_page=i + 1, poppler_path=poppler_path
+    )
+    text = pytesseract.image_to_string(pages[0])
+    ocr_texts.append(text)
+
+    # Print progress every 10 pages
+    if (i + 1) % 10 == 0 or (i + 1) == page_count:
+        print(f"   ... processed {i + 1}/{page_count} pages")
+        
 # --- Step 2: Group pages into payslips ---
 print("📄 Grouping pages into individual payslips...")
 
