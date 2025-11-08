@@ -169,44 +169,123 @@ def upload_file_to_google_drive(service, filename, file_bytes, mime_type="applic
 # Text/detail extraction utils
 # -----------------------------
 def get_details_from_text(text):
-    """Extract Year, Month, and IPPIS Number from payslip text. Returns dict or None."""
-    try:
+    """
+    Extract Year, Month, and IPPIS Number from payslip text.
+    Returns dict or None. Prioritizes patterns that are common in payslips.
+    """
+    text_upper = text.upper()
+    details = {}
+
+    # 1. Look for IPPIS number more robustly
+    # Prioritize 'IPPIS Number: XXXXXX'
+    ippis_match_1 = re.search(r'IPPIS\s*Number[:\-]?\s*(\d{6,10})', text, re.IGNORECASE)
+    if ippis_match_1:
+        details['ippis_number'] = ippis_match_1.group(1)
+    else:
+        # Fallback to a generic 6-10 digit number that might be IPPIS,
+        # but only if it's somewhat isolated or prominent.
+        # This can be tricky and might pick up other numbers.
+        # Let's try to make it more context-aware if possible,
+        # e.g., numbers near "STAFF ID", "EMPLOYEE NO", etc.
+        # For now, keep it broad but understand its limitations.
+        ippis_match_2 = re.search(r'(?<!\d)(\d{6,10})(?!\d)', text) # Ensures it's not part of a larger number
+        if ippis_match_2:
+            details['ippis_number'] = ippis_match_2.group(1)
+
+
+    # 2. Look for Month and Year
+    # Prioritize Month-YYYY or Month YYYY patterns
+    month_map_abbr = {
+        'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04', 'MAY': '05', 'JUN': '06',
+        'JUL': '07', 'AUG': '08', 'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'
+    }
+    month_map_full = {
+        'JANUARY': '01', 'FEBRUARY': '02', 'MARCH': '03', 'APRIL': '04', 'MAY': '05', 'JUNE': '06',
+        'JULY': '07', 'AUGUST': '08', 'SEPTEMBER': '09', 'OCTOBER': '10', 'NOVEMBER': '11', 'DECEMBER': '12'
+    }
+
+    # Pattern 1: MMM-YYYY or MONTH YYYY (e.g., OCT-2023, October 2023)
+    date_match_1 = re.search(r'\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[-\s](20\d{2})\b', text_upper)
+    date_match_2 = re.search(r'\b(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+(20\d{2})\b', text_upper)
+
+    month_str, year_str = None, None
+
+    if date_match_1:
+        month_str = date_match_1.group(1)
+        year_str = date_match_1.group(2)
+        details['month'] = month_map_abbr.get(month_str, None)
+        details['year'] = year_str
+    elif date_match_2:
+        month_str = date_match_2.group(1)
+        year_str = date_match_2.group(2)
+        details['month'] = month_map_full.get(month_str, None)
+        details['year'] = year_str
+    else:
+        # Fallback: Try to find a year and then look for a month near it.
+        # This is less reliable but can catch some cases.
         year_match = re.search(r'\b(20\d{2})\b', text)
-        year = year_match.group(1) if year_match else None
+        if year_match:
+            details['year'] = year_match.group(1)
+            # Try to find a month name anywhere in the text if year is found
+            for m_full, m_num in month_map_full.items():
+                if m_full in text_upper:
+                    details['month'] = m_num
+                    break
+            if not details.get('month'): # If full month not found, try abbr
+                 for m_abbr, m_num in month_map_abbr.items():
+                    if m_abbr in text_upper:
+                        details['month'] = m_num
+                        break
 
-        month_abbr_match = re.search(r'\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-\d{4}\b', text, re.IGNORECASE)
-        month = None
-        if month_abbr_match:
-            month_map = {
-                'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04', 'MAY': '05', 'JUN': '06',
-                'JUL': '07', 'AUG': '08', 'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'
-            }
-            month = month_map.get(month_abbr_match.group(1).upper())
+    # Ensure both year, month, and IPPIS are found for a valid payslip match
+    if 'year' in details and 'month' in details and 'ippis_number' in details:
+        return details
+    return None
 
-        if not month:
-            full_month_match = re.search(r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(20\d{2})\b', text, re.IGNORECASE)
-            if full_month_match:
-                month_map_full = {
-                    'January': '01', 'February': '02', 'March': '03', 'April': '04', 'May': '05', 'June': '06',
-                    'July': '07', 'August': '08', 'September': '09', 'October': '10', 'November': '11', 'December': '12'
-                }
-                month = month_map_full.get(full_month_match.group(1).capitalize())
-                if not year:
-                    year = full_month_match.group(2)
 
-        ippis_match = re.search(r'IPPIS\s*Number[:\-]?\s*(\w+)', text, re.IGNORECASE)
-        ippis_number = ippis_match.group(1) if ippis_match else None
+def group_pages_by_payslip_from_texts(texts):
+    groups = []
+    current_group_pages = [] # Pages belonging to the current potential payslip
+    
+    # Heuristics for Start/End Markers
+    START_MARKERS = ["FEDERAL GOVERNMENT OF NIGERIA", "PAYSLIP", "ARMTI"] # ARMTI might be a good specific marker
+    END_MARKERS = ["TOTAL NET EARNINGS", "NET PAY", "NET SALARY", "NET EARNINGS"]
 
-        if not ippis_number:
-            ippis_number_generic_match = re.search(r'\b(\d{6,10})\b', text) # Broaden to catch more numbers as potential IPPIS
-            if ippis_number_generic_match:
-                ippis_number = ippis_number_generic_match.group(1)
+    for i, t in enumerate(texts):
+        tu = (t or "").upper()
 
-        if year and month and ippis_number:
-            return {'year': year, 'month': month, 'ippis_number': ippis_number}
-        return None
-    except Exception:
-        return None
+        # Check for strong start marker
+        is_strong_start = any(marker in tu for marker in START_MARKERS)
+        
+        # Check for strong end marker
+        is_strong_end = any(marker in tu for marker in END_MARKERS)
+
+        if is_strong_start and current_group_pages:
+            # If a new payslip header is found AND we have pages in current_group_pages,
+            # this means the previous group is complete.
+            groups.append(current_group_pages)
+            current_group_pages = [i] # Start new group with current page
+        elif is_strong_end and current_group_pages:
+            # If an end marker is found, this page completes the current group.
+            current_group_pages.append(i)
+            groups.append(current_group_pages)
+            current_group_pages = [] # Clear for next payslip
+        else:
+            # If no strong start/end, or if it's the very first page with a start marker,
+            # just add to the current group.
+            current_group_pages.append(i)
+
+    # Add any remaining pages as a final group
+    if current_group_pages:
+        groups.append(current_group_pages)
+
+    # Fallback: If no meaningful groups were formed (e.g., only one large group or many singletons
+    # without clear markers), assume each page is a separate payslip.
+    if not groups or (len(groups) == 1 and len(groups[0]) == len(texts)):
+        st.info("No distinct payslip markers found for intelligent grouping. Falling back to treating each page as a potential payslip.")
+        return [[i] for i in range(len(texts))]
+
+    return groups
 
 # -----------------------------
 # OCR / Non-OCR extraction functions
