@@ -537,7 +537,6 @@ if st.session_state.processed_payslips_data:
 
                     # Update the main editor display after upload
                     # This relies on Streamlit rerunning and the data_editor picking up changes
-                    st.session_state.payslip_selection_editor = edited_data # Force refresh if needed
                     upload_progress_bar.empty()
                     st.success(f"Google Drive upload process complete. {uploaded_count} files attempted.")
 
