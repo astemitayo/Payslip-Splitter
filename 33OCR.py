@@ -168,15 +168,33 @@ def upload_file_to_google_drive(service, filename, file_bytes, mime_type="applic
 # -----------------------------
 # Text/detail extraction utils
 # -----------------------------
-def get_details_from_text(text):
-    """
-    Extract Year, Month, and IPPIS Number from payslip text.
-    Returns dict or None. Prioritizes patterns that are common in payslips.
-    """
-    text_upper = text.upper()
-    details = {}
+# --- Step 2: Group pages into payslips ---
+print("📄 Grouping pages into individual payslips...")
 
-   # --- Step 3: Extract info and save each payslip ---
+payslip_groups = []
+current_group = []
+
+for i, text in enumerate(ocr_texts):
+    text_upper = text.upper()
+
+    # Start of new payslip
+    if "FEDERAL GOVERNMENT OF NIGERIA" in text_upper:
+        if current_group:
+            payslip_groups.append(current_group)
+            current_group = []
+    current_group.append(i)
+
+    # End of payslip
+    if "TOTAL NET EARNINGS" in text_upper:
+        payslip_groups.append(current_group)
+        current_group = []
+
+if current_group:
+    payslip_groups.append(current_group)
+
+print(f"✅ Detected {len(payslip_groups)} payslips.\n")
+
+# --- Step 3: Extract info and save each payslip ---
 month_map = {
     'JANUARY': '01', 'FEBRUARY': '02', 'MARCH': '03', 'APRIL': '04',
     'MAY': '05', 'JUNE': '06', 'JULY': '07', 'AUGUST': '08',
@@ -232,51 +250,6 @@ for idx, group in enumerate(payslip_groups, start=1):
     # --- Write the individual payslip ---
     with open(filepath, "wb") as f:
         writer.write(f)
-
-
-def group_pages_by_payslip_from_texts(texts):
-    groups = []
-    current_group_pages = [] # Pages belonging to the current potential payslip
-    
-    # Heuristics for Start/End Markers
-    START_MARKERS = ["FEDERAL GOVERNMENT OF NIGERIA", "PAYSLIP", "ARMTI"] # ARMTI might be a good specific marker
-    END_MARKERS = ["TOTAL NET EARNINGS", "NET PAY", "NET SALARY", "NET EARNINGS"]
-
-    for i, t in enumerate(texts):
-        tu = (t or "").upper()
-
-        # Check for strong start marker
-        is_strong_start = any(marker in tu for marker in START_MARKERS)
-        
-        # Check for strong end marker
-        is_strong_end = any(marker in tu for marker in END_MARKERS)
-
-        if is_strong_start and current_group_pages:
-            # If a new payslip header is found AND we have pages in current_group_pages,
-            # this means the previous group is complete.
-            groups.append(current_group_pages)
-            current_group_pages = [i] # Start new group with current page
-        elif is_strong_end and current_group_pages:
-            # If an end marker is found, this page completes the current group.
-            current_group_pages.append(i)
-            groups.append(current_group_pages)
-            current_group_pages = [] # Clear for next payslip
-        else:
-            # If no strong start/end, or if it's the very first page with a start marker,
-            # just add to the current group.
-            current_group_pages.append(i)
-
-    # Add any remaining pages as a final group
-    if current_group_pages:
-        groups.append(current_group_pages)
-
-    # Fallback: If no meaningful groups were formed (e.g., only one large group or many singletons
-    # without clear markers), assume each page is a separate payslip.
-    if not groups or (len(groups) == 1 and len(groups[0]) == len(texts)):
-        st.info("No distinct payslip markers found for intelligent grouping. Falling back to treating each page as a potential payslip.")
-        return [[i] for i in range(len(texts))]
-
-    return groups
 
 # -----------------------------
 # OCR / Non-OCR extraction functions
