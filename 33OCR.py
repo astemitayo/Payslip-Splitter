@@ -170,7 +170,6 @@ def upload_file_to_google_drive(service, filename, file_bytes, mime_type="applic
 # -----------------------------
 # --- Step 1: Convert all pages to images and OCR them ---
 input_pdf = [}
-print("🔍 Performing OCR on PDF pages (memory-safe mode)...")
 reader = PdfReader(input_pdf)
 page_count = len(reader.pages)
 
