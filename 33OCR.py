@@ -13,7 +13,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
 # Optional OCR libs (used only when OCR is selected)
-from pdf2image import convert_from_bytes
+from pdf2image import convert_from_bytes # Changed from convert_from_path
 import pytesseract
 
 # -----------------------------
@@ -166,129 +166,52 @@ def upload_file_to_google_drive(service, filename, file_bytes, mime_type="applic
         raise
 
 # -----------------------------
-# Text/detail extraction utils
+# Text/detail extraction utils - ADAPTED FROM YOUR WORKING SCRIPT
 # -----------------------------
-def get_details_from_text(text):
+def get_details_from_text(merged_text, group_idx):
     """
-    Extract Year, Month, and IPPIS Number from payslip text.
-    Returns dict or None. Prioritizes patterns that are common in payslips.
+    Extract Year, Month, and IPPIS Number from payslip text using the robust regexes.
+    Returns dict or None.
     """
-    text_upper = text.upper()
-    details = {}
-
-    # 1. Look for IPPIS number more robustly
-    # Prioritize 'IPPIS Number: XXXXXX'
-    ippis_match_1 = re.search(r'IPPIS\s*Number[:\-]?\s*(\d{6,10})', text, re.IGNORECASE)
-    if ippis_match_1:
-        details['ippis_number'] = ippis_match_1.group(1)
-    else:
-        # Fallback to a generic 6-10 digit number that might be IPPIS,
-        # but only if it's somewhat isolated or prominent.
-        # This can be tricky and might pick up other numbers.
-        # Let's try to make it more context-aware if possible,
-        # e.g., numbers near "STAFF ID", "EMPLOYEE NO", etc.
-        # For now, keep it broad but understand its limitations.
-        ippis_match_2 = re.search(r'(?<!\d)(\d{6,10})(?!\d)', text) # Ensures it's not part of a larger number
-        if ippis_match_2:
-            details['ippis_number'] = ippis_match_2.group(1)
-
-
-    # 2. Look for Month and Year
-    # Prioritize Month-YYYY or Month YYYY patterns
-    month_map_abbr = {
-        'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04', 'MAY': '05', 'JUN': '06',
-        'JUL': '07', 'AUG': '08', 'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'
-    }
-    month_map_full = {
-        'JANUARY': '01', 'FEBRUARY': '02', 'MARCH': '03', 'APRIL': '04', 'MAY': '05', 'JUNE': '06',
-        'JULY': '07', 'AUGUST': '08', 'SEPTEMBER': '09', 'OCTOBER': '10', 'NOVEMBER': '11', 'DECEMBER': '12'
+    text_upper = merged_text.upper()
+    
+    month_map = {
+        'JANUARY': '01', 'FEBRUARY': '02', 'MARCH': '03', 'APRIL': '04',
+        'MAY': '06', 'JUNE': '06', 'JULY': '07', 'AUGUST': '08', # Corrected MAY to 05, was 06
+        'SEPTEMBER': '09', 'OCTOBER': '10', 'NOVEMBER': '11', 'DECEMBER': '12'
     }
 
-    # Pattern 1: MMM-YYYY or MONTH YYYY (e.g., OCT-2023, October 2023)
-    date_match_1 = re.search(r'\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[-\s](20\d{2})\b', text_upper)
-    date_match_2 = re.search(r'\b(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+(20\d{2})\b', text_upper)
+    # --- Extract metadata ---
+    year_match = re.search(r'\b(20\d{2})\b', merged_text)
+    month_match = re.search(
+        r'\b(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\b',
+        merged_text, re.IGNORECASE
+    )
 
-    month_str, year_str = None, None
+    # --- Robust IPPIS detection (order matters for prioritization) ---
+    ippis = None
+    m1 = re.search(r'IPPIS\s*Number[:\-]?\s*(\d{3,10})', merged_text, re.IGNORECASE) # Added max digits for IPPIS
+    m2 = re.search(r'(\d{3,10})\s*Step', merged_text, re.IGNORECASE)
+    m3 = re.search(r'FGN\s+CIVIL\s+SERVICE.*?(\d{5,10})', merged_text, re.IGNORECASE | re.DOTALL)
+    m4 = re.search(r'FEDERAL\s+GOVERNMENT.*?(\d{5,10})', merged_text, re.IGNORECASE | re.DOTALL)
+    m5 = re.search(r'\b(\d{6,10})\b', merged_text) # General 6-10 digit number as last resort
 
-    if date_match_1:
-        month_str = date_match_1.group(1)
-        year_str = date_match_1.group(2)
-        details['month'] = month_map_abbr.get(month_str, None)
-        details['year'] = year_str
-    elif date_match_2:
-        month_str = date_match_2.group(1)
-        year_str = date_match_2.group(2)
-        details['month'] = month_map_full.get(month_str, None)
-        details['year'] = year_str
-    else:
-        # Fallback: Try to find a year and then look for a month near it.
-        # This is less reliable but can catch some cases.
-        year_match = re.search(r'\b(20\d{2})\b', text)
-        if year_match:
-            details['year'] = year_match.group(1)
-            # Try to find a month name anywhere in the text if year is found
-            for m_full, m_num in month_map_full.items():
-                if m_full in text_upper:
-                    details['month'] = m_num
-                    break
-            if not details.get('month'): # If full month not found, try abbr
-                 for m_abbr, m_num in month_map_abbr.items():
-                    if m_abbr in text_upper:
-                        details['month'] = m_num
-                        break
+    if m1: ippis = m1.group(1)
+    elif m2: ippis = m2.group(1)
+    elif m3: ippis = m3.group(1)
+    elif m4: ippis = m4.group(1)
+    elif m5: ippis = m5.group(1)
 
-    # Ensure both year, month, and IPPIS are found for a valid payslip match
-    if 'year' in details and 'month' in details and 'ippis_number' in details:
-        return details
+    year = year_match.group(1) if year_match else None
+    month = month_map.get(month_match.group(1).upper(), None) if month_match else None
+    
+    # Use 'Unknown' placeholders if not found
+    if year and month and ippis:
+        return {'year': year, 'month': month, 'ippis_number': ippis}
     return None
 
-
-def group_pages_by_payslip_from_texts(texts):
-    groups = []
-    current_group_pages = [] # Pages belonging to the current potential payslip
-    
-    # Heuristics for Start/End Markers
-    START_MARKERS = ["FEDERAL GOVERNMENT OF NIGERIA", "PAYSLIP", "ARMTI"] # ARMTI might be a good specific marker
-    END_MARKERS = ["TOTAL NET EARNINGS", "NET PAY", "NET SALARY", "NET EARNINGS"]
-
-    for i, t in enumerate(texts):
-        tu = (t or "").upper()
-
-        # Check for strong start marker
-        is_strong_start = any(marker in tu for marker in START_MARKERS)
-        
-        # Check for strong end marker
-        is_strong_end = any(marker in tu for marker in END_MARKERS)
-
-        if is_strong_start and current_group_pages:
-            # If a new payslip header is found AND we have pages in current_group_pages,
-            # this means the previous group is complete.
-            groups.append(current_group_pages)
-            current_group_pages = [i] # Start new group with current page
-        elif is_strong_end and current_group_pages:
-            # If an end marker is found, this page completes the current group.
-            current_group_pages.append(i)
-            groups.append(current_group_pages)
-            current_group_pages = [] # Clear for next payslip
-        else:
-            # If no strong start/end, or if it's the very first page with a start marker,
-            # just add to the current group.
-            current_group_pages.append(i)
-
-    # Add any remaining pages as a final group
-    if current_group_pages:
-        groups.append(current_group_pages)
-
-    # Fallback: If no meaningful groups were formed (e.g., only one large group or many singletons
-    # without clear markers), assume each page is a separate payslip.
-    if not groups or (len(groups) == 1 and len(groups[0]) == len(texts)):
-        st.info("No distinct payslip markers found for intelligent grouping. Falling back to treating each page as a potential payslip.")
-        return [[i] for i in range(len(texts))]
-
-    return groups
-
 # -----------------------------
-# OCR / Non-OCR extraction functions
+# OCR / Non-OCR extraction functions - Mostly kept the same for modularity
 # -----------------------------
 def extract_text_from_pdf_non_ocr(reader):
     texts = []
@@ -300,48 +223,71 @@ def extract_text_from_pdf_non_ocr(reader):
     return texts
 
 def extract_text_page_ocr(pdf_bytes, page_index):
-    # pdf2image uses 1-based page indices
     images = convert_from_bytes(pdf_bytes, dpi=150, first_page=page_index + 1, last_page=page_index + 1)
     if not images:
         return ""
     return pytesseract.image_to_string(images[0])
 
 def extract_all_pages_ocr(pdf_bytes):
-    images = convert_from_bytes(pdf_bytes, dpi=150)
-    texts = []
-    for img in images:
-        texts.append(pytesseract.image_to_string(img))
-    return texts
+    # This function is now crucial for the "Full OCR" mode.
+    # It converts all pages to images and then OCRs them one by one,
+    # similar to your local script's Step 1.
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    num_pages = len(reader.pages)
+    
+    ocr_texts = []
+    for i in range(num_pages):
+        # Convert only one page at a time to control memory use on Streamlit Cloud
+        # No poppler_path needed if poppler-utils is in PATH
+        pages = convert_from_bytes(pdf_bytes, dpi=150, first_page=i + 1, last_page=i + 1)
+        if pages: # Ensure page was converted
+            text = pytesseract.image_to_string(pages[0])
+            ocr_texts.append(text)
+        else:
+            ocr_texts.append("") # Append empty if conversion fails for a page
+    return ocr_texts
 
-def group_pages_by_payslip_from_texts(texts):
-    groups = []
-    current = []
-    for i, t in enumerate(texts):
-        tu = (t or "").upper()
-        # Start marker heuristic - Look for "FEDERAL GOVERNMENT OF NIGERIA" or "PAYSLIP"
-        # and ensure it's not the first page if we are starting a new group
-        # This prevents breaking a multi-page payslip that starts with a header on page 1
-        is_new_payslip_header = ("FEDERAL GOVERNMENT OF NIGERIA" in tu or "PAYSLIP" in tu)
-        if is_new_payslip_header and current and i not in current: # Only start a new group if current is not empty and it's not the same first page
-            groups.append(current)
-            current = []
-        current.append(i)
-        # End marker heuristics
-        if any(k in tu for k in ("TOTAL NET EARNINGS", "NET PAY", "NET SALARY", "NET EARNINGS")):
-            # If an end marker is found, this group is complete.
-            # Add it, and clear current for the next potential payslip.
-            groups.append(current)
-            current = []
-    if current: # Add any remaining pages as a final group
-        groups.append(current)
 
-    # If grouping produced only trivial singletons or no markers found, fall back to per-page grouping
-    # This also helps if the PDF has no clear markers but each page is a payslip
-    if not groups or all(len(g) == 1 for g in groups) and len(groups) == len(texts):
-        st.info("No strong payslip markers found for intelligent grouping. Falling back to treating each page as a potential payslip.")
-        return [[i] for i in range(len(texts))]
+# -----------------------------
+# Grouping function - ADAPTED FROM YOUR WORKING SCRIPT
+# -----------------------------
+def group_pages_by_payslip_from_texts(ocr_texts, pdf_num_pages):
+    """
+    Groups pages into individual payslips based on start/end markers
+    as done in your local script.
+    """
+    payslip_groups = []
+    current_group = []
 
-    return groups
+    for i, text in enumerate(ocr_texts):
+        text_upper = text.upper()
+
+        # Start of new payslip
+        if "FEDERAL GOVERNMENT OF NIGERIA" in text_upper:
+            if current_group: # If we have pages in current_group, this means a new payslip started
+                payslip_groups.append(current_group)
+                current_group = [] # Start a new group
+        current_group.append(i) # Add current page to the group
+
+        # End of payslip
+        # Only check for END marker if current_group is not empty to avoid creating empty groups
+        if "TOTAL NET EARNINGS" in text_upper and current_group and i in current_group:
+            # If an end marker is found and this page is part of the current group,
+            # this means the current payslip is complete.
+            # It's already been added to current_group, so just append and reset.
+            payslip_groups.append(current_group)
+            current_group = []
+
+    # Add any remaining pages as a final group
+    if current_group:
+        payslip_groups.append(current_group)
+
+    # Fallback if no groups were properly formed by the markers, or only one large group
+    if not payslip_groups or (len(payslip_groups) == 1 and len(payslip_groups[0]) == pdf_num_pages):
+        st.info("No distinct payslip markers found for intelligent grouping. Falling back to treating each page as a potential payslip.")
+        return [[i] for i in range(pdf_num_pages)]
+
+    return payslip_groups
 
 
 # -----------------------------
@@ -357,11 +303,6 @@ def split_and_rename_pdf_with_modes(input_pdf_bytes, ocr_mode="Hybrid", naming_p
     """
     processed_payslips_data = []
     try:
-        # Write bytes to a temp file for pdf2image (which needs a file path)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-            tmp_file.write(input_pdf_bytes)
-            tmp_path = tmp_file.name
-
         reader = PdfReader(io.BytesIO(input_pdf_bytes))
         num_pages = len(reader.pages)
         
@@ -370,9 +311,10 @@ def split_and_rename_pdf_with_modes(input_pdf_bytes, ocr_mode="Hybrid", naming_p
         st.toast(f"Extracting text from {num_pages} page(s) in {ocr_mode} mode...", icon="📄")
 
         if ocr_mode == "Full OCR":
+            # Direct full OCR as in your working script
             page_texts = extract_all_pages_ocr(input_pdf_bytes)
-
         else:
+            # Use Hybrid or Normal logic as before
             non_ocr_texts = extract_text_from_pdf_non_ocr(reader)
             if ocr_mode == "Normal":
                 page_texts = non_ocr_texts
@@ -388,19 +330,21 @@ def split_and_rename_pdf_with_modes(input_pdf_bytes, ocr_mode="Hybrid", naming_p
                             st.warning(f"OCR fallback failed for page {i+1}: {e}")
                             page_texts.append(txt or "") # Use non-OCR if OCR fails
 
-        page_groups = group_pages_by_payslip_from_texts(page_texts)
+        # Group pages based on the extracted texts
+        # Note: group_pages_by_payslip_from_texts expects ocr_texts now, which is `page_texts` here
+        page_groups = group_pages_by_payslip_from_texts(page_texts, num_pages)
 
         st.toast(f"Found {len(page_groups)} potential payslip documents after grouping.", icon="✂️")
 
         for g_index, group in enumerate(page_groups, start=1):
             writer = PdfWriter()
             merged_text = ""
-            for pg in group:
-                writer.add_page(reader.pages[pg])
-                merged_text += (page_texts[pg] or "") + "\n"
+            for pg_idx in group: # pg_idx is the 0-based page number
+                writer.add_page(reader.pages[pg_idx])
+                merged_text += (page_texts[pg_idx] or "") + "\n"
 
-            details = get_details_from_text(merged_text)
-            
+            details = get_details_from_text(merged_text, g_index) # Pass g_index for potential fallback filename
+
             payslip_info = {
                 'key': None, # Unique identifier for tracking
                 'filename': None,
@@ -416,13 +360,14 @@ def split_and_rename_pdf_with_modes(input_pdf_bytes, ocr_mode="Hybrid", naming_p
                 payslip_info['year'] = details["year"]
                 payslip_info['month'] = details["month"]
                 payslip_info['ippis'] = details["ippis_number"]
-                payslip_info['key'] = f"{details['year']}_{details['month']}_{details['ippis_number']}_{g_index}" # Added g_index to key to ensure uniqueness if details are same but from different groups
+                # Use a more robust key to ensure uniqueness: year_month_ippis_groupindex
+                payslip_info['key'] = f"{details['year']}_{details['month']}_{details['ippis_number']}_{g_index}"
                 payslip_info['filename'] = naming_pattern.format(year=details["year"], month=details["month"], ippis=details["ippis_number"])
                 if not payslip_info['filename'].lower().endswith(".pdf"):
                     payslip_info['filename'] += ".pdf"
                 payslip_info['status'] = "Details Extracted"
             else:
-                payslip_info['key'] = f"no_details_group_{g_index}_from_{os.path.basename(tmp_path)}"
+                payslip_info['key'] = f"no_details_group_{g_index}_from_uploaded_pdf" # More generic if details missing
                 payslip_info['filename'] = f"Payslip_Group_{g_index}_missing_details.pdf"
                 payslip_info['status'] = "Details Missing" # Updated status
 
@@ -438,12 +383,7 @@ def split_and_rename_pdf_with_modes(input_pdf_bytes, ocr_mode="Hybrid", naming_p
     except Exception as e:
         st.error(f"Error while processing PDF: {e}")
         return []
-    finally:
-        if 'tmp_path' in locals() and os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
+
 
 # -----------------------------
 # App Instructions & Uploader
