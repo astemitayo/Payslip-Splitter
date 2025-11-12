@@ -165,7 +165,7 @@ def get_details_from_text(merged_text, group_idx):
     
     month_map = {
         'JANUARY': '01', 'FEBRUARY': '02', 'MARCH': '03', 'APRIL': '04',
-        'MAY': '06', 'JUNE': '06', 'JULY': '07', 'AUGUST': '08', # Corrected MAY to 05, was 06
+        'MAY': '05', 'JUNE': '06', 'JULY': '07', 'AUGUST': '08', # Corrected MAY to 05, was 06
         'SEPTEMBER': '09', 'OCTOBER': '10', 'NOVEMBER': '11', 'DECEMBER': '12'
     }
 
@@ -201,6 +201,34 @@ def get_details_from_text(merged_text, group_idx):
 # -----------------------------
 # OCR / Non-OCR extraction functions - Mostly kept the same for modularity
 # -----------------------------
+
+# *** FIX: ADD MISSING FUNCTION FOR NON-OCR EXTRACTION ***
+def extract_text_from_pdf_non_ocr(reader):
+    """
+    Extracts text from all pages of a PdfReader object using non-OCR methods (PyPDF2).
+    Returns a list of strings, one for each page.
+    """
+    texts = []
+    for page in reader.pages:
+        try:
+            # PyPDF2's extract_text might return None
+            texts.append(page.extract_text() or "")
+        except Exception:
+            texts.append("")
+    return texts
+
+# *** FIX: ADD MISSING FUNCTION FOR SINGLE-PAGE OCR EXTRACTION (for Hybrid mode) ***
+def extract_text_page_ocr(pdf_bytes, page_index):
+    """
+    Performs OCR on a single page of the PDF bytes for Hybrid mode fallback.
+    page_index is 0-based, convert_from_bytes uses 1-based indexing.
+    """
+    # Use dpi=150 as consistent with the full OCR function
+    pages = convert_from_bytes(pdf_bytes, dpi=150, first_page=page_index + 1, last_page=page_index + 1)
+    if pages:
+        return pytesseract.image_to_string(pages[0])
+    return ""
+
 def extract_all_pages_ocr(pdf_bytes, num_pages_total): # Added num_pages_total for context
     """
     Performs full OCR on all pages, providing detailed progress updates.
@@ -299,7 +327,8 @@ def split_and_rename_pdf_with_modes(input_pdf_bytes, ocr_mode="Hybrid", naming_p
 
             text_extraction_progress = st.progress(0, text=processing_message)
 
-            non_ocr_texts = extract_text_from_pdf_non_ocr(reader)
+            # This call now works because extract_text_from_pdf_non_ocr is defined
+            non_ocr_texts = extract_text_from_pdf_non_ocr(reader) 
             if ocr_mode == "Normal":
                 page_texts = non_ocr_texts
             else:  # Hybrid
@@ -308,7 +337,8 @@ def split_and_rename_pdf_with_modes(input_pdf_bytes, ocr_mode="Hybrid", naming_p
                         page_texts.append(txt)
                     else:
                         try:
-                            ocr_txt = extract_text_page_ocr(input_pdf_bytes, i)
+                            # This call now works because extract_text_page_ocr is defined
+                            ocr_txt = extract_text_page_ocr(input_pdf_bytes, i) 
                             page_texts.append(ocr_txt)
                         except Exception as e:
                             st.warning(f"OCR fallback failed for page {i+1}: {e}")
