@@ -1,52 +1,46 @@
+import streamlit as st
+import re
 import os
 import io
-import re
 import json
 import zipfile
 import tempfile
 import base64
-import streamlit as st
-
 from PyPDF2 import PdfReader, PdfWriter
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-# Optional OCR libs (used only when OCR is selected)
-from pdf2image import convert_from_bytes # Changed from convert_from_path
-import pytesseract
-
-# -----------------------------
-# Persistent User Preferences
-# -----------------------------
+# --- Persistent User Preferences ---
 PREF_FILE = "user_prefs.json"
 
+# Load preferences if file exists
 if "user_prefs" not in st.session_state:
     if os.path.exists(PREF_FILE):
         try:
             with open(PREF_FILE, "r") as f:
                 st.session_state.user_prefs = json.load(f)
         except Exception:
+            # Handle potential corruption or empty file
             st.session_state.user_prefs = {}
     else:
+        # Default preferences
         st.session_state.user_prefs = {}
 
 # Set sensible defaults if keys missing
 _defaults = {
     "drive_folder": "your-default-folder-id",
-    "enable_drive_upload": True, # Keep this as a general toggle for showing the option
+    "enable_drive_upload": True,
     "enable_local_download": True,
-    "naming_pattern": "{year} {month} {ippis}",
+    "naming_pattern": "{year} {month} {ippis}", 
     "timezone": "Africa/Lagos",
-    "date_format": "YYYY-MM-DD",
-    "ocr_mode": "Hybrid"  # options: Normal, Hybrid, Full OCR
+    "date_format": "YYYY-MM-DD"
 }
 for k, v in _defaults.items():
     st.session_state.user_prefs.setdefault(k, v)
 
-# -----------------------------
-# UI - Sidebar Settings
-# -----------------------------
+
+# --- UI - Sidebar Settings ---
 st.sidebar.header("⚙️ Settings")
 
 st.session_state.user_prefs["drive_folder"] = st.sidebar.text_input(
@@ -55,9 +49,8 @@ st.session_state.user_prefs["drive_folder"] = st.sidebar.text_input(
     key="drive_folder"
 )
 
-# We'll keep this setting as a master toggle for showing the GDrive section
 st.session_state.user_prefs["enable_drive_upload"] = st.sidebar.checkbox(
-    "Enable Google Drive features", # Renamed for clarity
+    "Upload to Google Drive",
     value=st.session_state.user_prefs["enable_drive_upload"],
     key="enable_drive_upload"
 )
@@ -75,44 +68,88 @@ st.session_state.user_prefs["naming_pattern"] = st.sidebar.text_input(
     key="naming_pattern"
 )
 
-st.session_state.user_prefs["ocr_mode"] = st.sidebar.selectbox(
-    "OCR Mode",
-    options=["Normal", "Hybrid", "Full OCR"],
-    index=["Normal", "Hybrid", "Full OCR"].index(st.session_state.user_prefs.get("ocr_mode", "Hybrid")),
-    help="Normal = PyPDF2 text only. Hybrid = text first, OCR fallback per-page. Full OCR = OCR every page.",
-    key="ocr_mode"
+st.session_state.user_prefs["timezone"] = st.sidebar.selectbox(
+    "Timezone", ["Africa/Lagos", "UTC", "Europe/London"],
+    index=["Africa/Lagos", "UTC", "Europe/London"].index(st.session_state.user_prefs["timezone"]),
+    key="timezone"
 )
 
-# Persist preferences immediately
+st.session_state.user_prefs["date_format"] = st.sidebar.radio(
+    "Date format", ["YYYY-MM-DD", "DD/MM/YYYY", "MM-YYYY"],
+    index=["YYYY-MM-DD", "DD/MM/YYYY", "MM-YYYY"].index(st.session_state.user_prefs["date_format"]),
+    key="date_format"
+)
+
+# Save preferences immediately
 try:
     with open(PREF_FILE, "w") as f:
         json.dump(st.session_state.user_prefs, f)
 except Exception:
     st.warning("Could not save preferences to disk (permissions?). Preferences will persist only in this session.")
 
-# -----------------------------
-# Page config & styling
-# -----------------------------
-st.set_page_config(page_title="ARMTI Payslip Manager", page_icon="assets/ARMTI.png", layout="wide")
 
+# --- Streamlit Page Config & Styling ---
+st.set_page_config(
+    page_title="ARMTI Payslip Portal",
+    page_icon="assets/ARMTI.png",
+    layout="wide"
+)
+
+# Custom Styling (kept from input)
 st.markdown("""
 <style>
-.app-title { font-family: 'Montserrat', sans-serif; color: #2E86C1; font-size: 2.2rem; font-weight:700; }
-.top-banner { text-align: center; margin-bottom: 18px; }
-.stButton button { background-color: #2E86C1; color: white; border-radius: 8px; padding: 0.5em 1em; font-weight:bold; }
-.stButton button:hover { background-color: #1B4F72; }
+.main-title {
+    font-size: 2rem;
+    font-weight: bold;
+    color: #2E86C1;
+    text-align: center;
+    margin-bottom: 20px;
+}
+.stButton button {
+    background-color: #2E86C1;
+    color: white;
+    border-radius: 8px;
+    padding: 0.5em 1em;
+    font-weight: bold;
+}
+.stButton button:hover {
+    background-color: #1B4F72;
+}
 </style>
 """, unsafe_allow_html=True)
 
+# Convert logo to base64 so it embeds cleanly
 def get_base64_of_bin_file(bin_file):
     if not os.path.exists(bin_file):
-        return ""
-    with open(bin_file, "rb") as f:
-        return base64.b64encode(f.read()).decode()
+        # st.error(f"Error: Asset file not found at {bin_file}. Please ensure 'assets/ARMTI.png' exists.")
+        return "" 
+    with open(bin_file, 'rb') as f:
+        data = f.read()
+    return base64.b64encode(data).decode()
 
 logo_base64 = get_base64_of_bin_file("assets/ARMTI.png")
+
 st.markdown(
     f"""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@700&display=swap');
+
+    .app-title {{
+        font-family: 'Montserrat', sans-serif;
+        color: #2E86C1;
+        font-size: 2.4rem;
+        font-weight: bold;
+        margin: 0;
+        padding: 0;
+    }}
+
+    .top-banner {{
+        text-align: center;
+        margin-top: -40px;
+        margin-bottom: 15px;
+    }}
+    </style>
+
     <div class="top-banner">
         {'<img src="data:image/png;base64,' + logo_base64 + '" width="110" style="margin-bottom:8px;">' if logo_base64 else ''}
         <h1 class="app-title">ARMTI PAYSLIP MANAGER</h1>
@@ -121,537 +158,326 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# -----------------------------
-# Google Drive helpers
-# -----------------------------
+# --- Google Drive Config & Helpers ---
 SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive']
-
 try:
+    # Prefer secret but fallback to preference
     GOOGLE_DRIVE_FOLDER_ID = st.secrets["google_drive_folder_id"]
-except Exception:
+except KeyError:
     GOOGLE_DRIVE_FOLDER_ID = st.session_state.user_prefs["drive_folder"]
-    if not GOOGLE_DRIVE_FOLDER_ID:
-        st.warning("No Google Drive folder configured. Set one in settings or in st.secrets.")
+    if not st.secrets.get("google_drive_folder_id"):
+        # Only show a warning if the secret is missing and we're using the fallback
+        st.warning("`google_drive_folder_id` not found in `st.secrets`. Using folder ID from preferences.")
 
 def authenticate_google_drive():
+    """Authenticate with Google Drive using Streamlit secrets."""
     try:
-        # Accessing st.secrets["gcp_service_account"] which is a dictionary due to TOML parsing
         creds = service_account.Credentials.from_service_account_info(
             st.secrets["gcp_service_account"], scopes=SCOPES
         )
         return build("drive", "v3", credentials=creds)
     except Exception as e:
-        st.error(f"Google Drive authentication failed: {e}")
+        st.error(f"Google Drive authentication failed: {e}. Make sure 'gcp_service_account' is correctly set in .streamlit/secrets.toml")
         return None
 
 def upload_file_to_google_drive(service, filename, file_bytes, mime_type="application/pdf"):
+    """Upload a file to Google Drive."""
+    file_metadata = {"name": filename, "parents": [GOOGLE_DRIVE_FOLDER_ID]}
+    media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=True)
     try:
-        file_metadata = {"name": filename, "parents": [GOOGLE_DRIVE_FOLDER_ID]}
-        media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=True)
-        file = service.files().create(body=file_metadata, media_body=media, fields="id", supportsAllDrives=True).execute()
-        return file.get("id")
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields="id",
+            supportsAllDrives=True 
+        ).execute()
+        st.success(f"✅ Uploaded {filename} (ID: {file.get('id')})")
     except Exception as e:
-        raise
+        raise e # Re-raise to be caught in the main processing loop
 
-# -----------------------------
-# Text/detail extraction utils - ADAPTED FROM YOUR WORKING SCRIPT
-# -----------------------------
-def get_details_from_text(merged_text, group_idx):
-    """
-    Extract Year, Month, and IPPIS Number from payslip text using the robust regexes.
-    Returns dict or None.
-    """
-    text_upper = merged_text.upper()
-    
-    month_map = {
-        'JANUARY': '01', 'FEBRUARY': '02', 'MARCH': '03', 'APRIL': '04',
-        'MAY': '05', 'JUNE': '06', 'JULY': '07', 'AUGUST': '08', # Corrected MAY to 05, was 06
-        'SEPTEMBER': '09', 'OCTOBER': '10', 'NOVEMBER': '11', 'DECEMBER': '12'
-    }
-
-    # --- Extract metadata ---
-    year_match = re.search(r'\b(20\d{2})\b', merged_text)
-    month_match = re.search(
-        r'\b(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\b',
-        merged_text, re.IGNORECASE
-    )
-
-    # --- Robust IPPIS detection (order matters for prioritization) ---
-    ippis = None
-    m1 = re.search(r'IPPIS\s*Number[:\-]?\s*(\d{3,10})', merged_text, re.IGNORECASE) # Added max digits for IPPIS
-    m2 = re.search(r'(\d{3,10})\s*Step', merged_text, re.IGNORECASE)
-    m3 = re.search(r'FGN\s+CIVIL\s+SERVICE.*?(\d{5,10})', merged_text, re.IGNORECASE | re.DOTALL)
-    m4 = re.search(r'FEDERAL\s+GOVERNMENT.*?(\d{5,10})', merged_text, re.IGNORECASE | re.DOTALL)
-    m5 = re.search(r'\b(\d{6,10})\b', merged_text) # General 6-10 digit number as last resort
-
-    if m1: ippis = m1.group(1)
-    elif m2: ippis = m2.group(1)
-    elif m3: ippis = m3.group(1)
-    elif m4: ippis = m4.group(1)
-    elif m5: ippis = m5.group(1)
-
-    year = year_match.group(1) if year_match else None
-    month = month_map.get(month_match.group(1).upper(), None) if month_match else None
-    
-    # Use 'Unknown' placeholders if not found
-    if year and month and ippis:
-        return {'year': year, 'month': month, 'ippis_number': ippis}
-    return None
-
-# -----------------------------
-# OCR / Non-OCR extraction functions - Mostly kept the same for modularity
-# -----------------------------
-
-# *** FIX: ADD MISSING FUNCTION FOR NON-OCR EXTRACTION ***
-def extract_text_from_pdf_non_ocr(reader):
-    """
-    Extracts text from all pages of a PdfReader object using non-OCR methods (PyPDF2).
-    Returns a list of strings, one for each page.
-    """
-    texts = []
-    for page in reader.pages:
-        try:
-            # PyPDF2's extract_text might return None
-            texts.append(page.extract_text() or "")
-        except Exception:
-            texts.append("")
-    return texts
-
-# *** FIX: ADD MISSING FUNCTION FOR SINGLE-PAGE OCR EXTRACTION (for Hybrid mode) ***
-def extract_text_page_ocr(pdf_bytes, page_index):
-    """
-    Performs OCR on a single page of the PDF bytes for Hybrid mode fallback.
-    page_index is 0-based, convert_from_bytes uses 1-based indexing.
-    """
-    # Use dpi=150 as consistent with the full OCR function
-    pages = convert_from_bytes(pdf_bytes, dpi=150, first_page=page_index + 1, last_page=page_index + 1)
-    if pages:
-        return pytesseract.image_to_string(pages[0])
-    return ""
-
-def extract_all_pages_ocr(pdf_bytes, num_pages_total): # Added num_pages_total for context
-    """
-    Performs full OCR on all pages, providing detailed progress updates.
-    """
-    reader = PdfReader(io.BytesIO(pdf_bytes))
-    
-    ocr_texts = []
-    
-    # Initialize Streamlit progress bar for OCR
-    ocr_progress_bar = st.progress(0, text=f"Performing Full OCR on {num_pages_total} pages...")
-    
-    for i in range(num_pages_total): # Use num_pages_total passed from main function
-        # Convert only one page at a time to control memory use
-        pages = convert_from_bytes(pdf_bytes, dpi=150, first_page=i + 1, last_page=i + 1)
-        if pages:
-            text = pytesseract.image_to_string(pages[0])
-            ocr_texts.append(text)
-        else:
-            ocr_texts.append("") # Append empty if conversion fails for a page
-        
-        # Update progress bar
-        progress_percentage = (i + 1) / num_pages_total
-        ocr_progress_bar.progress(progress_percentage, text=f"Performing Full OCR: Page {i + 1}/{num_pages_total}")
-        
-    ocr_progress_bar.empty() # Clear the progress bar after completion
-    return ocr_texts
-
-
-# -----------------------------
-# Grouping function - ADAPTED FROM YOUR WORKING SCRIPT
-# -----------------------------
-def group_pages_by_payslip_from_texts(ocr_texts, pdf_num_pages):
-    """
-    Groups pages into individual payslips based on start/end markers
-    as done in your local script.
-    """
-    payslip_groups = []
-    current_group = []
-
-    for i, text in enumerate(ocr_texts):
-        text_upper = text.upper()
-
-        # Start of new payslip
-        if "FEDERAL GOVERNMENT OF NIGERIA" in text_upper:
-            if current_group: # If we have pages in current_group, this means a new payslip started
-                payslip_groups.append(current_group)
-                current_group = [] # Start a new group
-        current_group.append(i) # Add current page to the group
-
-        # End of payslip
-        # Only check for END marker if current_group is not empty to avoid creating empty groups
-        if "TOTAL NET EARNINGS" in text_upper and current_group and i in current_group:
-            # If an end marker is found and this page is part of the current group,
-            # this means the current payslip is complete.
-            # It's already been added to current_group, so just append and reset.
-            payslip_groups.append(current_group)
-            current_group = []
-
-    # Add any remaining pages as a final group
-    if current_group:
-        payslip_groups.append(current_group)
-
-    # Fallback if no groups were properly formed by the markers, or only one large group
-    if not payslip_groups or (len(payslip_groups) == 1 and len(payslip_groups[0]) == pdf_num_pages):
-        st.info("No distinct payslip markers found for intelligent grouping. Falling back to treating each page as a potential payslip.")
-        return [[i] for i in range(pdf_num_pages)]
-
-    return payslip_groups
-
-
-# -----------------------------
-# Main splitting function (hybrid support)
-# -----------------------------
-@st.cache_data(show_spinner=False) # Changed to False, as we'll manage progress explicitly
-def split_and_rename_pdf_with_modes(input_pdf_bytes, ocr_mode="Hybrid", naming_pattern="{year} {month} {ippis}"):
-    """
-    input_pdf_bytes: bytes of the pdf file
-    ocr_mode: "Normal", "Hybrid", or "Full OCR"
-    Returns: list of dictionaries, each representing a processed payslip part.
-             Each dict has: {'key', 'filename', 'file_bytes', 'year', 'month', 'ippis', 'status'}
-    """
-    processed_payslips_data = []
+def get_details_from_text(text):
+    """Extract Year, Month, and IPPIS Number from payslip text."""
     try:
-        reader = PdfReader(io.BytesIO(input_pdf_bytes))
-        num_pages = len(reader.pages)
-        
-        page_texts = []
-        
-        if ocr_mode == "Full OCR":
-            # Direct full OCR, now with detailed progress
-            page_texts = extract_all_pages_ocr(input_pdf_bytes, num_pages) # Pass num_pages
-        else:
-            # Existing Hybrid or Normal logic
-            processing_message = f"Extracting text from {num_pages} page(s) in {ocr_mode} mode..."
-            st.toast(processing_message, icon="📄") # Still use toast for initial message
+        year_match = re.search(r'\b(20\d{2})\b', text)
+        year = year_match.group(1) if year_match else None
 
-            text_extraction_progress = st.progress(0, text=processing_message)
-
-            # This call now works because extract_text_from_pdf_non_ocr is defined
-            non_ocr_texts = extract_text_from_pdf_non_ocr(reader) 
-            if ocr_mode == "Normal":
-                page_texts = non_ocr_texts
-            else:  # Hybrid
-                for i, txt in enumerate(non_ocr_texts):
-                    if txt and len(txt.strip()) >= 60:
-                        page_texts.append(txt)
-                    else:
-                        try:
-                            # This call now works because extract_text_page_ocr is defined
-                            ocr_txt = extract_text_page_ocr(input_pdf_bytes, i) 
-                            page_texts.append(ocr_txt)
-                        except Exception as e:
-                            st.warning(f"OCR fallback failed for page {i+1}: {e}")
-                            page_texts.append(txt or "") # Use non-OCR if OCR fails
-                    
-                    # Update progress for Hybrid/Normal
-                    progress_percentage = (i + 1) / num_pages
-                    text_extraction_progress.progress(progress_percentage, text=f"{processing_message} (Page {i+1}/{num_pages})")
-            text_extraction_progress.empty() # Clear after completion
-
-
-        # Group pages based on the extracted texts
-        page_groups = group_pages_by_payslip_from_texts(page_texts, num_pages)
-
-        st.toast(f"Found {len(page_groups)} potential payslip documents after grouping.", icon="✂️")
-
-        # Progress bar for processing individual payslip groups
-        payslip_processing_progress = st.progress(0, text=f"Processing {len(page_groups)} payslip documents...")
-
-        for g_index, group in enumerate(page_groups, start=1):
-            writer = PdfWriter()
-            merged_text = ""
-            for pg_idx in group:
-                writer.add_page(reader.pages[pg_idx])
-                merged_text += (page_texts[pg_idx] or "") + "\n"
-
-            details = get_details_from_text(merged_text, g_index)
-
-            payslip_info = {
-                'key': None,
-                'filename': None,
-                'file_bytes': None,
-                'year': None,
-                'month': None,
-                'ippis': None,
-                'status': 'Details not found',
-                'selected_for_upload': False
+        # Try to match MON-YYYY
+        month_abbr_match = re.search(r'\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-\d{4}\b', text, re.IGNORECASE)
+        month = None
+        if month_abbr_match:
+            month_abbr = month_abbr_match.group(1).upper()
+            month_map = {
+                'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04', 'MAY': '05', 'JUN': '06',
+                'JUL': '07', 'AUG': '08', 'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'
             }
+            month = month_map.get(month_abbr)
+            
+        # Fallback: Try to match full month name
+        if not month:
+            full_month_match = re.search(r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(20\d{2})\b', text, re.IGNORECASE)
+            if full_month_match:
+                full_month_name = full_month_match.group(1).capitalize()
+                month_map_full = {
+                    'January': '01', 'February': '02', 'March': '03', 'April': '04', 'May': '05', 'June': '06',
+                    'July': '07', 'August': '08', 'September': '09', 'October': '10', 'November': '11', 'December': '12'
+                }
+                month = month_map_full.get(full_month_name)
+                # If year was not found by previous regex but found here
+                if not year:
+                    year = full_month_match.group(2)
+
+
+        # Primary IPPIS match
+        ippis_match = re.search(r'IPPIS\s*Number:\s*(\w+)', text, re.IGNORECASE)
+        ippis_number = ippis_match.group(1) if ippis_match else None
+        
+        # Fallback IPPIS regex
+        if not ippis_number:
+            ippis_number_generic_match = re.search(r'\b(\d{6,10})\b', text) 
+            if ippis_number_generic_match:
+                ippis_number = ippis_number_generic_match.group(1)
+
+
+        if year and month and ippis_number:
+            return {'year': year, 'month': month, 'ippis_number': ippis_number}
+        
+        return None
+    except Exception:
+        return None
+
+# --- CORE NORMAL MODE EXTRACTION FUNCTION ---
+def split_and_rename_pdf(input_pdf_file):
+    """
+    Split and rename PDF pages using PyPDF2's extract_text (Normal Mode).
+    Returns all processed pages and a subset with extracted details.
+    """
+    # (identity_key, filename, file_bytes)
+    all_processed_files_with_keys = [] 
+    matched_files_with_keys = [] 
+    try:
+        reader = PdfReader(input_pdf_file)
+        num_pages = len(reader.pages)
+        progress = st.progress(0, text=f"Processing {num_pages} pages in Normal Mode...")
+
+        for i, page in enumerate(reader.pages):
+            writer = PdfWriter()
+            writer.add_page(page)
+            
+            # --- NORMAL MODE EXTRACTION ---
+            text = page.extract_text() 
+            details = get_details_from_text(text)
+            # --- END NORMAL MODE EXTRACTION ---
+
+            identity_key = None
+            new_filename = None
 
             if details:
-                payslip_info['year'] = details["year"]
-                payslip_info['month'] = details["month"]
-                payslip_info['ippis'] = details["ippis_number"]
-                payslip_info['key'] = f"{details['year']}_{details['month']}_{details['ippis_number']}_{g_index}"
-                payslip_info['filename'] = naming_pattern.format(year=details["year"], month=details["month"], ippis=details["ippis_number"])
-                if not payslip_info['filename'].lower().endswith(".pdf"):
-                    payslip_info['filename'] += ".pdf"
-                payslip_info['status'] = "Details Extracted"
+                identity_key = f"{details['year']}_{details['month']}_{details['ippis_number']}"
+                
+                new_filename = st.session_state.user_prefs["naming_pattern"].format(
+                    year=details["year"], month=details["month"], ippis=details["ippis_number"]
+                )
+                if not new_filename.lower().endswith(".pdf"):
+                    new_filename += ".pdf"
             else:
-                payslip_info['key'] = f"no_details_group_{g_index}_from_uploaded_pdf"
-                payslip_info['filename'] = f"Payslip_Group_{g_index}_missing_details.pdf"
-                payslip_info['status'] = "Details Missing"
+                new_filename = f"page_{i + 1}_missing_details.pdf"
+                identity_key = f"page_{i + 1}_no_details_{os.path.basename(input_pdf_file)}" 
 
-            buf = io.BytesIO()
-            writer.write(buf)
-            buf.seek(0)
-            payslip_info['file_bytes'] = buf.read()
-            processed_payslips_data.append(payslip_info)
-            
-            # Update payslip processing progress
-            payslip_processing_progress.progress(g_index / len(page_groups), text=f"Processing payslip {g_index}/{len(page_groups)}")
+            buffer = io.BytesIO()
+            writer.write(buffer)
+            buffer.seek(0)
+            file_bytes = buffer.read()
 
-        payslip_processing_progress.empty() # Clear after completion
+            all_processed_files_with_keys.append((identity_key, new_filename, file_bytes))
+            if details: 
+                matched_files_with_keys.append((identity_key, new_filename, file_bytes))
+
+            progress.progress((i + 1) / num_pages, text=f"Processing page {i+1}/{num_pages}...")
+
         st.success("✅ All pages processed successfully!")
-        return processed_payslips_data
+        progress.empty()
+        return all_processed_files_with_keys, matched_files_with_keys
 
     except Exception as e:
         st.error(f"Error while processing PDF: {e}")
-        return []
+        return [], []
 
-
-# -----------------------------
-# App Instructions & Uploader
-# -----------------------------
+# --- Instructions ---
 st.markdown("""
-Upload a multi-page PDF containing payslips. The app can:
-- split single-page payslips, - group multi-page payslips (detected via markers),
-- use OCR (full/hybrid) for scanned PDFs,
-- allow review and selective upload to Google Drive and/or provide ZIP downloads.
+Upload a multi-page PDF containing payslips. The app will split each page into a separate PDF 
+using standard text extraction (Normal Mode) and rename it based on the Year, Month, and IPPIS Number found.
 """)
 
+# --- Main File Uploader ---
 uploaded_file = st.file_uploader("📂 Upload a PDF containing payslips", type="pdf", help="Drag & drop or click to browse")
-
-# Initialize session state for processed files
-if 'processed_payslips_data' not in st.session_state:
-    st.session_state.processed_payslips_data = []
-if 'uploaded_file_keys_log' not in st.session_state:
-    st.session_state.uploaded_file_keys_log = set()
-    # Load existing log if available
-    UPLOAD_LOG = "uploaded_files.json"
-    if os.path.exists(UPLOAD_LOG):
-        try:
-            with open(UPLOAD_LOG, "r") as f:
-                st.session_state.uploaded_file_keys_log = set(json.load(f))
-        except Exception:
-            pass # Ignore if log is corrupted or empty
 
 if uploaded_file:
     st.success("File uploaded successfully!")
 
-    if st.button("🚀 Split & Process Payslips", key="process_button"):
-        # Clear previous processing results
-        st.session_state.processed_payslips_data = []
-        # Clear cache for the split function to ensure fresh processing
-        split_and_rename_pdf_with_modes.clear()
+    if st.button("🚀 Split & Process Payslips"):
+        # Use tempfile to write bytes to a file path, as PyPDF2 might be more robust with paths
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            tmp_file_path = tmp_file.name
 
-        ocr_mode = st.session_state.user_prefs.get("ocr_mode", "Hybrid")
-        naming_pattern = st.session_state.user_prefs.get("naming_pattern", "{year} {month} {ippis}")
+        # Assign the results
+        all_pdfs_with_keys, matched_pdfs_with_keys = split_and_rename_pdf(tmp_file_path)
 
-        processed_data = split_and_rename_pdf_with_modes(
-            uploaded_file.getvalue(), ocr_mode=ocr_mode, naming_pattern=naming_pattern
-        )
-        st.session_state.processed_payslips_data = processed_data
-        # Initialize selection state if it's new data
-        for i, item in enumerate(st.session_state.processed_payslips_data):
-            if item['key'] in st.session_state.uploaded_file_keys_log:
-                # If already uploaded, deselect by default for new upload round, but indicate it
-                item['selected_for_upload'] = False
-                item['upload_status_detail'] = 'Already uploaded'
-            else:
-                # Select by default if details extracted, otherwise deselect
-                item['selected_for_upload'] = (item['status'] == "Details Extracted")
-                item['upload_status_detail'] = 'Pending'
+        # Clean up temporary file
+        os.unlink(tmp_file_path)
 
+        if all_pdfs_with_keys:
+            tab1, tab2 = st.tabs(["☁️ Google Drive Upload", "💻 Local Download"])
 
-if st.session_state.processed_payslips_data:
-    st.markdown("---")
-    st.subheader("📊 Review & Select Payslips")
+            # --- UPLOAD LOGIC SETUP ---
+            UPLOAD_LOG = "uploaded_files.json"
+            uploaded_file_keys = set()
+            if os.path.exists(UPLOAD_LOG):
+                try:
+                    with open(UPLOAD_LOG, "r") as f:
+                        uploaded_file_keys = set(json.load(f))
+                except Exception:
+                    st.warning("Could not load UPLOAD_LOG file. Starting with an empty log.")
 
-    # Select All / Deselect All functionality
-    col_sel_all, col_desel_all = st.columns(2)
-    if col_sel_all.button("✅ Select All for Upload", key="select_all"):
-        for item in st.session_state.processed_payslips_data:
-            # Only select if it's not already uploaded and currently 'pending'
-            if item.get('upload_status_detail', '') != 'Already uploaded':
-                item['selected_for_upload'] = True
-    if col_desel_all.button("❌ Deselect All for Upload", key="deselect_all"):
-        for item in st.session_state.processed_payslips_data:
-            item['selected_for_upload'] = False
+            with tab1:
+                if st.session_state.user_prefs["enable_drive_upload"]:
+                    service = authenticate_google_drive()
+                    if service and matched_pdfs_with_keys:
+                        st.info(f"Found {len(matched_pdfs_with_keys)} potential payslips to upload.")
 
-    # Display results in an editable table
-    st.markdown("Use the checkboxes to select payslips for Google Drive upload.")
+                        # --- Initialize status table ---
+                        status_data = []
+                        for key, filename, file_bytes in matched_pdfs_with_keys:
+                            if key in uploaded_file_keys:
+                                status_data.append({"filename": filename, "status": "⏩ Skipped (Already Uploaded)"})
+                            else:
+                                status_data.append({"filename": filename, "status": "⏳ Pending Upload"})
 
-    # Prepare data for display
-    display_data = []
-    for i, item in enumerate(st.session_state.processed_payslips_data):
-        display_data.append({
-            "Selected": item['selected_for_upload'],
-            "Filename": item['filename'],
-            "Year": item['year'] if item['year'] else "-",
-            "Month": item['month'] if item['month'] else "-",
-            "IPPIS": item['ippis'] if item['ippis'] else "-",
-            "Processing Status": item['status'],
-            "Upload Status": item.get('upload_status_detail', 'N/A') # Show specific upload status
-        })
+                        status_placeholder = st.empty()
+                        status_placeholder.table(status_data)
+                        progress_bar = st.progress(0, text="Starting Google Drive upload...")
 
-    # Use st.data_editor for interactive selection
-    # `on_change` is important to update the session_state
-    edited_data = st.data_editor(
-        display_data,
-        column_config={
-            "Selected": st.column_config.CheckboxColumn(
-                "Upload?",
-                help="Select to upload this payslip to Google Drive",
-                default=False,
-            ),
-            "Filename": st.column_config.TextColumn("Filename", width="large"),
-            "Year": "Year",
-            "Month": "Month",
-            "IPPIS": "IPPIS No.",
-            "Processing Status": "Processing Status",
-            "Upload Status": "Upload Status",
-        },
-        hide_index=True,
-        key="payslip_selection_editor",
-    )
+                        total = len(matched_pdfs_with_keys)
+                        completed = 0
+                        new_uploads = 0
 
-    # Update session_state.processed_payslips_data based on editor changes
-    for i, row in enumerate(edited_data):
-        if i < len(st.session_state.processed_payslips_data):
-            st.session_state.processed_payslips_data[i]['selected_for_upload'] = row['Selected']
+                        for key, filename, file_bytes in matched_pdfs_with_keys:
+                            # 1. Skip if already logged
+                            if key in uploaded_file_keys:
+                                completed += 1
+                                progress_bar.progress(completed / total, text=f"Skipped {filename}...")
+                                continue
 
-    # Separate Tabs for actions
-    tab_drive, tab_download = st.tabs(["☁️ Google Drive Actions", "💻 Local Download"])
+                            # 2. Update status to uploading in the table
+                            for row in status_data:
+                                if row["filename"] == filename:
+                                    row["status"] = "🔄 Uploading..."
+                                    break
+                            status_placeholder.table(status_data)
 
-    # -------- Google Drive Upload Tab --------
-    with tab_drive:
-        if st.session_state.user_prefs.get("enable_drive_upload", True):
-            selected_for_upload = [item for item in st.session_state.processed_payslips_data if item['selected_for_upload']]
-            st.info(f"You have **{len(selected_for_upload)}** payslips selected for Google Drive upload.")
+                            # 3. Attempt upload
+                            try:
+                                upload_file_to_google_drive(service, filename, file_bytes)
+                                for row in status_data:
+                                    if row["filename"] == filename:
+                                        row["status"] = "✅ Uploaded Successfully"
+                                        break
+                                uploaded_file_keys.add(key) 
+                                new_uploads += 1
+                            except Exception as e:
+                                for row in status_data:
+                                    if row["filename"] == filename:
+                                        row["status"] = f"❌ Failed ({e})"
+                                        break
+                                st.error(f"Failed to upload {filename}: {e}") # Show in main body too
 
-            if st.button("⬆️ Upload Selected to Google Drive", key="upload_selected_button",
-                         disabled=not selected_for_upload):
-                service = authenticate_google_drive()
-                if service:
-                    progress_text = "Uploading payslips to Google Drive. Please wait."
-                    upload_progress_bar = st.progress(0, text=progress_text)
+                            # 4. Update progress and status display
+                            completed += 1
+                            progress_bar.progress(completed / total, text=f"Uploading {filename}...")
+                            status_placeholder.table(status_data)
 
-                    total_to_upload = len(selected_for_upload)
-                    uploaded_count = 0
-                    
-                    for i, item in enumerate(selected_for_upload):
-                        key = item['key']
-                        filename = item['filename']
-                        file_bytes = item['file_bytes']
+                        # Finalize
+                        progress_bar.empty()
+                        st.info(f"Upload complete. {new_uploads} new files uploaded, {total - new_uploads} skipped.")
 
-                        # Check if already uploaded in this session or previously
-                        if key in st.session_state.uploaded_file_keys_log:
-                            item['upload_status_detail'] = "Skipped (Already Logged)"
-                            uploaded_count += 1 # Count as processed for progress bar
-                            upload_progress_bar.progress(uploaded_count / total_to_upload, text=f"{progress_text} ({filename}: Skipped)")
-                            continue
-
+                        # Save updated log
                         try:
-                            st.toast(f"Uploading {filename}...", icon="🚀")
-                            file_id = upload_file_to_google_drive(service, filename, file_bytes)
-                            item['upload_status_detail'] = f"Uploaded (ID: {file_id})"
-                            st.session_state.uploaded_file_keys_log.add(key)
-                            st.toast(f"Uploaded {filename} successfully!", icon="✅")
-                        except Exception as e:
-                            item['upload_status_detail'] = f"Failed ({e})"
-                            st.error(f"Failed to upload {filename}: {e}")
+                            with open(UPLOAD_LOG, "w") as f:
+                                json.dump(list(uploaded_file_keys), f)
+                        except Exception:
+                            st.warning("Could not save updated upload log to disk.")
 
-                        uploaded_count += 1
-                        upload_progress_bar.progress(uploaded_count / total_to_upload, text=f"{progress_text} ({filename}: {item['upload_status_detail']})")
+                    elif not service:
+                         st.warning("Google Drive upload is enabled but authentication failed. Skipping upload.")
+                    else: 
+                        st.info("No payslips with extractable details found for upload.")
 
-                    # Update the main editor display after upload
-                    # This relies on Streamlit rerunning and the data_editor picking up changes
-                    upload_progress_bar.empty()
-                    st.success(f"Google Drive upload process complete. {uploaded_count} files attempted.")
 
-                    # Persist updated upload log
+            # --- Admin Authentication ---
+            st.sidebar.markdown("---")
+            st.sidebar.markdown("### 🔐 Admin Login")
+            admin_pw = st.sidebar.text_input("Enter admin password", type="password")
+
+            is_admin = admin_pw == st.secrets.get("admin_password", "")
+
+            if is_admin:
+                st.sidebar.success("✅ Admin access granted")
+
+                # --- Maintenance: Upload Log ---
+                st.sidebar.markdown("---")
+                st.sidebar.subheader("🛠 Upload Log Maintenance")
+
+                # Reset upload log
+                if st.sidebar.button("🗑 Reset Upload Log"):
                     try:
-                        UPLOAD_LOG = "uploaded_files.json"
-                        with open(UPLOAD_LOG, "w") as f:
-                            json.dump(list(st.session_state.uploaded_file_keys_log), f)
-                    except Exception:
-                        st.warning("Could not save updated upload log to disk.")
+                        with open("uploaded_files.json", "w") as f:
+                            json.dump([], f)
+                        st.sidebar.success("Upload log has been reset.")
+                        uploaded_file_keys = set() # Reset in memory too
+                    except Exception as e:
+                        st.sidebar.error(f"Failed to reset log: {e}")
+
+                # View current upload log (using the latest state of uploaded_file_keys)
+                if uploaded_file_keys:
+                    st.sidebar.info(f"📊 {len(uploaded_file_keys)} files currently logged as uploaded.")
+
+                    if st.sidebar.checkbox("📂 Show Upload Log", key="show_upload_log"):
+                        st.sidebar.write(list(uploaded_file_keys))
                 else:
-                    st.warning("Google Drive authentication failed. Cannot upload.")
-        else:
-            st.info("Google Drive features are disabled in settings.")
+                    st.sidebar.info("No files logged as uploaded yet.")
 
-    # -------- Local Download Tab --------
-    with tab_download:
-        if st.session_state.user_prefs.get("enable_local_download", True):
-            matched_pdfs_with_keys = [
-                (item['key'], item['filename'], item['file_bytes'])
-                for item in st.session_state.processed_payslips_data
-                if item['status'] == "Details Extracted"
-            ]
-            all_pdfs_with_keys = [
-                (item['key'], item['filename'], item['file_bytes'])
-                for item in st.session_state.processed_payslips_data
-            ]
-
-            if matched_pdfs_with_keys:
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for key, filename, file_bytes in matched_pdfs_with_keys:
-                        zf.writestr(filename, file_bytes)
-                zip_buffer.seek(0)
-                st.download_button(
-                    "⬇️ Download Matched Payslips (ZIP)",
-                    data=zip_buffer,
-                    file_name="Matched_Payslips.zip",
-                    mime="application/zip",
-                    key="download_matched_zip"
-                )
             else:
-                st.info("No payslips with extractable details were found to download locally.")
+                st.sidebar.info("👤 Standard user mode (Admin tools hidden)")
 
-            if all_pdfs_with_keys:
-                zip_buffer_all = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer_all, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for key, filename, file_bytes in all_pdfs_with_keys:
-                        zf.writestr(filename, file_bytes)
-                zip_buffer_all.seek(0)
-                st.download_button(
-                    "⬇️ Download All Processed Payslips (ZIP)",
-                    data=zip_buffer_all,
-                    file_name="All_Processed_Payslips.zip",
-                    mime="application/zip",
-                    key="download_all_zip"
-                )
-            elif not matched_pdfs_with_keys:
-                st.info("No pages were processed for local download.")
-        else:
-            st.info("Local download is disabled in settings.")
 
-    # -------- Admin Sidebar (same as before) --------
-    st.sidebar.markdown("### 🔐 Admin Login")
-    admin_pw = st.sidebar.text_input("Enter admin password", type="password")
-    is_admin = admin_pw == st.secrets.get("admin_password", "")
+            with tab2:
+                if st.session_state.user_prefs["enable_local_download"]:
+                    if matched_pdfs_with_keys:
+                        zip_buffer = io.BytesIO()
+                        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                            for key, filename, file_bytes in matched_pdfs_with_keys:
+                                zf.writestr(filename, file_bytes)
+                        zip_buffer.seek(0)
+                        st.download_button(
+                            "⬇️ Download Matched Payslips (ZIP)",
+                            data=zip_buffer,
+                            file_name="Matched_Payslips.zip",
+                            mime="application/zip"
+                        )
+                    else:
+                        st.info("No payslips with extractable details were found to download locally.")
 
-    if is_admin:
-        st.sidebar.success("✅ Admin access granted")
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("🛠 Upload Log Maintenance")
-
-        if st.sidebar.button("🗑 Reset Upload Log"):
-            try:
-                UPLOAD_LOG = "uploaded_files.json"
-                with open(UPLOAD_LOG, "w") as f:
-                    json.dump([], f)
-                st.session_state.uploaded_file_keys_log = set() # Also clear session state log
-                st.sidebar.success("Upload log has been reset.")
-            except Exception as e:
-                st.sidebar.error(f"Failed to reset log: {e}")
-
-        # Display current log from session state
-        st.sidebar.info(f"📊 {len(st.session_state.uploaded_file_keys_log)} files currently logged as uploaded.")
-        if st.sidebar.checkbox("📂 Show Upload Log", key="show_upload_log_admin"):
-            st.sidebar.write(list(st.session_state.uploaded_file_keys_log)) # Display as list for readability
-    else:
-        st.sidebar.info("👤 Standard user mode (Admin tools hidden)")
+                    if all_pdfs_with_keys: # Offer download of all
+                        zip_buffer_all = io.BytesIO()
+                        with zipfile.ZipFile(zip_buffer_all, "w", zipfile.ZIP_DEFLATED) as zf:
+                            for key, filename, file_bytes in all_pdfs_with_keys:
+                                zf.writestr(filename, file_bytes)
+                        zip_buffer_all.seek(0)
+                        st.download_button(
+                            "⬇️ Download All Processed Payslips (ZIP)",
+                            data=zip_buffer_all,
+                            file_name="All_Processed_Payslips.zip",
+                            mime="application/zip"
+                        )
+                else:
+                    st.info("Local download is disabled in settings.")
