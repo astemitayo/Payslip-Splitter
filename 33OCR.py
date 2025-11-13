@@ -442,4 +442,34 @@ if st.session_state.processed_payslips_data:
         if st.session_state.user_prefs.get("enable_local_download", True):
             def create_zip(items):
                 buf = io.BytesIO()
-                with zipfile.Z
+                with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for item in items: zf.writestr(item['filename'], item['file_bytes'])
+                return buf.getvalue()
+
+            matched = [item for item in st.session_state.processed_payslips_data if item['status'] == "Details Extracted"]
+            if matched: st.download_button("⬇️ Download Matched (ZIP)", data=create_zip(matched), file_name="Matched_Payslips.zip", mime="application/zip")
+            if st.session_state.processed_payslips_data: st.download_button("⬇️ Download All Processed (ZIP)", data=create_zip(st.session_state.processed_payslips_data), file_name="All_Processed_Payslips.zip", mime="application/zip")
+        else:
+            st.info("Local download is disabled.")
+
+    # Admin Sidebar
+    st.sidebar.markdown("### 🔐 Admin Login")
+    admin_pw = st.sidebar.text_input("Enter admin password", type="password", key="admin_pw")
+    is_admin = admin_pw and admin_pw == st.secrets.get("admin_password", "admin")
+
+    if is_admin:
+        st.sidebar.success("✅ Admin access granted")
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("🛠 Upload Log Maintenance")
+        if st.sidebar.button("🗑 Reset Upload Log"):
+            try:
+                with open(UPLOAD_LOG, "w") as f: json.dump([], f)
+                st.session_state.uploaded_file_keys_log = set()
+                st.sidebar.success("Upload log reset.")
+            except Exception as e:
+                st.sidebar.error(f"Failed to reset log: {e}")
+        st.sidebar.info(f"📊 {len(st.session_state.uploaded_file_keys_log)} files logged as uploaded.")
+        if st.sidebar.checkbox("📂 Show Upload Log"):
+            st.sidebar.json(list(st.session_state.uploaded_file_keys_log))
+    elif admin_pw:
+        st.sidebar.error("Incorrect admin password.")
