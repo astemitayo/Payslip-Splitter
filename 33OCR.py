@@ -1,4 +1,4 @@
-# Code Hybrid - Unified & Modular (with Live Activity Log and KeyError Fix)
+# Code Hybrid - Unified & Modular (with Atomic Log Saving)
 import os
 import io
 import re
@@ -177,8 +177,6 @@ def get_details_from_text(merged_text, group_idx=None):
     ippis_match = re.search(r'\b(\d{6})\b', text)
     ippis_number = ippis_match.group(1) if ippis_match else None
     if year and month and ippis_number:
-        # --- THIS IS THE FIX ---
-        # Changed 'ippis_number' to 'ippis' to match the naming_pattern placeholder
         return {'year': year, 'month': month, 'ippis': ippis_number}
     return None
 
@@ -258,7 +256,6 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
                 page_texts = []
                 for i, txt in enumerate(non_ocr_texts):
                     candidate = txt or ""
-                    # Heuristic for OCR fallback
                     if len(candidate.strip()) < 80 or not ("FEDERAL GOVERNMENT" in candidate.upper() or re.search(r'\b(20\d{2})\b', candidate)):
                         ocr_txt = extract_text_page_ocr(input_pdf_bytes, i)
                         page_texts.append(ocr_txt if len(ocr_txt.strip()) > len(candidate.strip()) else candidate)
@@ -301,7 +298,6 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
         return processed
     except Exception as e:
         st.error(f"Error while processing PDF: {e}")
-        # Log the full traceback for debugging
         import traceback
         st.error(traceback.format_exc())
         return []
@@ -390,12 +386,15 @@ if st.session_state.processed_payslips_data:
                 service = authenticate_google_drive()
                 if service:
                     st.session_state.activity_log = []
-                    add_to_log(f"Starting upload of {len(selected)} files...")
+                    total_to_upload = len(selected)
+                    add_to_log(f"Starting upload of {total_to_upload} files...")
                     
                     log_placeholder = st.empty()
                     MAX_RETRIES, RETRY_DELAY = 3, 2
 
-                    for item in selected:
+                    for idx, item in enumerate(selected):
+                        progress_prefix = f"({idx + 1}/{total_to_upload})"
+
                         with log_placeholder.expander("Live Activity Log", expanded=True):
                             for log in st.session_state.activity_log:
                                 if log['status'] == 'success': st.success(log['message'])
@@ -406,22 +405,32 @@ if st.session_state.processed_payslips_data:
                         uploaded = False
                         for attempt in range(1, MAX_RETRIES + 1):
                             try:
-                                add_to_log(f"🚀 Uploading '{item['filename']}' (Attempt {attempt})...")
+                                add_to_log(f"{progress_prefix} 🚀 Uploading '{item['filename']}' (Attempt {attempt})...")
                                 file_id = upload_file_to_google_drive(service, item['filename'], item['file_bytes'])
                                 item['upload_status_detail'] = f"Uploaded (ID: {file_id})"
+                                
+                                # --- ATOMIC SAVE LOGIC ---
+                                # 1. Add key to in-memory log
                                 st.session_state.uploaded_file_keys_log.add(item['key'])
-                                add_to_log(f"✅ Success: '{item['filename']}'.", status="success")
+                                # 2. Immediately save the updated log to disk
+                                try:
+                                    with open(UPLOAD_LOG, "w") as f:
+                                        json.dump(list(st.session_state.uploaded_file_keys_log), f)
+                                except Exception as e:
+                                    add_to_log(f"CRITICAL: Could not save upload log to disk! {e}", "error")
+
+                                add_to_log(f"{progress_prefix} ✅ Success: '{item['filename']}'.", status="success")
                                 uploaded = True
-                                break
+                                break 
                             except Exception as e:
                                 if attempt < MAX_RETRIES:
-                                    add_to_log(f"⚠️ Failed attempt {attempt} for '{item['filename']}'. Retrying...", "warning")
+                                    add_to_log(f"{progress_prefix} ⚠️ Failed attempt {attempt} for '{item['filename']}'. Retrying...", "warning")
                                     time.sleep(RETRY_DELAY)
                                 else:
                                     item['upload_status_detail'] = f"Failed: {e}"
-                                    add_to_log(f"❌ Final upload failed for '{item['filename']}': {e}", "error")
+                                    add_to_log(f"{progress_prefix} ❌ Final upload failed for '{item['filename']}': {e}", "error")
                     
-                    add_to_log("🏁 Batch upload process complete.", "info")
+                    add_to_log(f"🏁 Batch upload process complete. Processed {total_to_upload} selected files.", "info")
                     with log_placeholder.expander("Live Activity Log", expanded=True):
                         for log in st.session_state.activity_log:
                             if log['status'] == 'success': st.success(log['message'])
@@ -429,10 +438,7 @@ if st.session_state.processed_payslips_data:
                             elif log['status'] == 'warning': st.warning(log['message'])
                             else: st.info(log['message'])
                     
-                    st.success("Google Drive upload process finished.")
-                    try:
-                        with open(UPLOAD_LOG, "w") as f: json.dump(list(st.session_state.uploaded_file_keys_log), f)
-                    except Exception: st.warning("Could not save upload log to disk.")
+                    st.success("Google Drive upload process finished. See log for details.")
                 else:
                     st.error("Google Drive authentication failed.")
         else:
@@ -443,7 +449,9 @@ if st.session_state.processed_payslips_data:
             def create_zip(items):
                 buf = io.BytesIO()
                 with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for item in items: zf.writestr(item['filename'], item['file_bytes'])
+                    for item in items:
+                        if 'filename' in item and 'file_bytes' in item:
+                            zf.writestr(item['filename'], item['file_bytes'])
                 return buf.getvalue()
 
             matched = [item for item in st.session_state.processed_payslips_data if item['status'] == "Details Extracted"]
