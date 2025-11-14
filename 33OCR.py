@@ -9,15 +9,19 @@ import tempfile
 import base64
 import streamlit as st
 
+# Add this section right after your imports
+# Tell pytesseract where to find the Tesseract-OCR executable
+# The 'r' before the string is important to handle backslashes correctly
+try:
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+except Exception as e:
+    st.error(f"Could not set Tesseract path, OCR will likely fail: {e}")
+    
 from PyPDF2 import PdfReader, PdfWriter
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from googleapiclient.errors import HttpError
-
-# Optional OCR libs (used only when OCR is selected)
-from pdf2image import convert_from_bytes
-import pytesseract
 
 # Add this section right after your imports
 # Tell pytesseract where to find the Tesseract-OCR executable
@@ -26,6 +30,11 @@ try:
     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 except Exception as e:
     st.error(f"Could not set Tesseract path, OCR will likely fail: {e}")
+
+# Optional OCR libs (used only when OCR is selected)
+from pdf2image import convert_from_bytes
+import pytesseract
+
 
 # -----------------------------
 # Persistent User Preferences
