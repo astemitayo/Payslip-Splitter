@@ -15,17 +15,30 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from googleapiclient.errors import HttpError
 
-# Add this section right after your imports
-# Tell pytesseract where to find the Tesseract-OCR executable
-# The 'r' before the string is important to handle backslashes correctly
-try:
-    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-except Exception as e:
-    st.error(f"Could not set Tesseract path, OCR will likely fail: {e}")
-
 # Optional OCR libs (used only when OCR is selected)
 from pdf2image import convert_from_bytes
 import pytesseract
+
+from pdf2image import convert_from_bytes
+import pytesseract
+import platform
+import os
+
+# Set tesseract path only on Windows
+if platform.system() == "Windows":
+    possible_paths = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    ]
+    for p in possible_paths:
+        if os.path.exists(p):
+            pytesseract.pytesseract.tesseract_cmd = p
+            break
+    else:
+        st.error("Tesseract not found on your system. Install from UB Mannheim release.")
+else:
+    # Linux (Streamlit Cloud) — do NOT set the path
+    pass
 
 
 # -----------------------------
