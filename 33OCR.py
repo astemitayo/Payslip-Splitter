@@ -19,6 +19,14 @@ from googleapiclient.errors import HttpError
 from pdf2image import convert_from_bytes
 import pytesseract
 
+# Add this section right after your imports
+# Tell pytesseract where to find the Tesseract-OCR executable
+# The 'r' before the string is important to handle backslashes correctly
+try:
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+except Exception as e:
+    st.error(f"Could not set Tesseract path, OCR will likely fail: {e}")
+
 # -----------------------------
 # Persistent User Preferences
 # -----------------------------
