@@ -171,7 +171,7 @@ def upload_file_to_google_drive(service, filename, file_bytes, mime_type="applic
         raise
 
 # -----------------------------
-# Text/detail extraction utilities (MODE-AWARE)
+# Text/detail extraction utilities (FINAL VERSION)
 # -----------------------------
 def get_details_from_text(merged_text, group_idx=None, ocr_mode="Hybrid"):
     if not merged_text:
@@ -190,28 +190,30 @@ def get_details_from_text(merged_text, group_idx=None, ocr_mode="Hybrid"):
 
     # --- MODE-SPECIFIC LOGIC ---
     if ocr_mode == "Full OCR":
-        # STRICT MODE: Only look for "MONTH YYYY" to avoid OCR noise.
-        year_match = re.search(r'\b(20\d{2})\b', merged_text)
-        full_month_match = re.search(r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\b', merged_text, re.IGNORECASE)
-        
-        if full_month_match and year_match:
-            month = month_map.get(full_month_match.group(1).capitalize())
-            year = year_match.group(1)
+        # STRICT MODE: Use a single, atomic regex to find "MONTH YYYY" together.
+        full_date_pattern = r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(20\d{2})\b'
+        match = re.search(full_date_pattern, merged_text, re.IGNORECASE)
+        if match:
+            month_name = match.group(1).upper()
+            month = month_map.get(month_name)
+            year = match.group(2)
 
     else:
-        # FLEXIBLE MODE: For Normal/Hybrid, trust abbreviations first.
+        # FLEXIBLE MODE: For Normal/Hybrid, trust abbreviations first for accuracy.
         month_abbr_match = re.search(r'\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[\-\s]?\s*(20\d{2})\b', merged_text, re.IGNORECASE)
         if month_abbr_match:
             abbr = month_abbr_match.group(1).upper()
             month = abbr_map.get(abbr)
             year = month_abbr_match.group(2)
-
+        
+        # Fallback to full month name if abbreviation not found
         if not month:
-            year_match = re.search(r'\b(20\d{2})\b', merged_text)
-            full_month_match = re.search(r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\b', merged_text, re.IGNORECASE)
-            if full_month_match and year_match:
-                month = month_map.get(full_month_match.group(1).capitalize())
-                year = year_match.group(1)
+            full_date_pattern = r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(20\d{2})\b'
+            match = re.search(full_date_pattern, merged_text, re.IGNORECASE)
+            if match:
+                month_name = match.group(1).upper()
+                month = month_map.get(month_name)
+                year = match.group(2)
 
     # IPPIS extraction is the same for all modes.
     ippis_match = re.search(r'\b(\d{6})\b', merged_text)
@@ -299,7 +301,6 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
             merged_text = "\n".join(page_texts[pg] or "" for pg in group)
             for pg in group: writer.add_page(reader.pages[pg])
             
-            # Pass the ocr_mode to the extraction function
             details = get_details_from_text(merged_text, g_idx, ocr_mode=ocr_mode)
             
             info = {'status': "Details Missing", 'selected_for_upload': False}
