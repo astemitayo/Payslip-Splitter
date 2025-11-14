@@ -18,9 +18,6 @@ from googleapiclient.errors import HttpError
 # Optional OCR libs (used only when OCR is selected)
 from pdf2image import convert_from_bytes
 import pytesseract
-
-from pdf2image import convert_from_bytes
-import pytesseract
 import platform
 import os
 
@@ -39,7 +36,6 @@ if platform.system() == "Windows":
 else:
     # Linux (Streamlit Cloud) — do NOT set the path
     pass
-
 
 # -----------------------------
 # Persistent User Preferences
@@ -63,7 +59,7 @@ _defaults = {
     "naming_pattern": "{year} {month} {ippis}",
     "timezone": "Africa/Lagos",
     "date_format": "YYYY-MM-DD",
-    "ocr_mode": "Hybrid"  # options: Normal, Hybrid, Full OCR
+    "ocr_mode": "Hybrid"
 }
 for k, v in _defaults.items():
     st.session_state.user_prefs.setdefault(k, v)
@@ -175,31 +171,55 @@ def upload_file_to_google_drive(service, filename, file_bytes, mime_type="applic
         raise
 
 # -----------------------------
-# Text/detail extraction utilities
+# Text/detail extraction utilities (MODE-AWARE)
 # -----------------------------
-def get_details_from_text(merged_text, group_idx=None):
+def get_details_from_text(merged_text, group_idx=None, ocr_mode="Hybrid"):
     if not merged_text:
         return None
-    text = merged_text
-    month_map = {'JANUARY': '01','FEBRUARY': '02','MARCH': '03','APRIL': '04','MAY': '05','JUNE': '06','JULY': '07','AUGUST': '08','SEPTEMBER': '09','OCTOBER': '10','NOVEMBER': '11','DECEMBER': '12'}
-    year_match = re.search(r'\b(20\d{2})\b', text)
-    year = year_match.group(1) if year_match else None
-    month_abbr_match = re.search(r'\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[\-\s]?\s*(20\d{2})\b', text, re.IGNORECASE)
-    month = None
-    if month_abbr_match:
-        abbr = month_abbr_match.group(1).upper()
-        abbr_map = {'JAN':'01','FEB':'02','MAR':'03','APR':'04','MAY':'05','JUN':'06','JUL':'07','AUG':'08','SEP':'09','OCT':'10','NOV':'11','DEC':'12'}
-        month = abbr_map.get(abbr)
-        if not year:
-            year = month_abbr_match.group(2)
-    if not month:
-        full_month_match = re.search(r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\b', text, re.IGNORECASE)
-        if full_month_match:
+
+    month_map = {
+        'JANUARY': '01', 'FEBRUARY': '02', 'MARCH': '03', 'APRIL': '04', 'MAY': '05', 'JUNE': '06',
+        'JULY': '07', 'AUGUST': '08', 'SEPTEMBER': '09', 'OCTOBER': '10', 'NOVEMBER': '11', 'DECEMBER': '12'
+    }
+    abbr_map = {
+        'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04', 'MAY': '05', 'JUN': '06',
+        'JUL': '07', 'AUG': '08', 'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'
+    }
+
+    year, month = None, None
+
+    # --- MODE-SPECIFIC LOGIC ---
+    if ocr_mode == "Full OCR":
+        # STRICT MODE: Only look for "MONTH YYYY" to avoid OCR noise.
+        year_match = re.search(r'\b(20\d{2})\b', merged_text)
+        full_month_match = re.search(r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\b', merged_text, re.IGNORECASE)
+        
+        if full_month_match and year_match:
             month = month_map.get(full_month_match.group(1).capitalize())
-    ippis_match = re.search(r'\b(\d{6})\b', text)
+            year = year_match.group(1)
+
+    else:
+        # FLEXIBLE MODE: For Normal/Hybrid, trust abbreviations first.
+        month_abbr_match = re.search(r'\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[\-\s]?\s*(20\d{2})\b', merged_text, re.IGNORECASE)
+        if month_abbr_match:
+            abbr = month_abbr_match.group(1).upper()
+            month = abbr_map.get(abbr)
+            year = month_abbr_match.group(2)
+
+        if not month:
+            year_match = re.search(r'\b(20\d{2})\b', merged_text)
+            full_month_match = re.search(r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\b', merged_text, re.IGNORECASE)
+            if full_month_match and year_match:
+                month = month_map.get(full_month_match.group(1).capitalize())
+                year = year_match.group(1)
+
+    # IPPIS extraction is the same for all modes.
+    ippis_match = re.search(r'\b(\d{6})\b', merged_text)
     ippis_number = ippis_match.group(1) if ippis_match else None
+
     if year and month and ippis_number:
         return {'year': year, 'month': month, 'ippis': ippis_number}
+    
     return None
 
 # -----------------------------
@@ -208,10 +228,8 @@ def get_details_from_text(merged_text, group_idx=None):
 def extract_text_from_pdf_non_ocr(reader):
     texts = []
     for page in reader.pages:
-        try:
-            texts.append(page.extract_text() or "")
-        except Exception:
-            texts.append("")
+        try: texts.append(page.extract_text() or "")
+        except Exception: texts.append("")
     return texts
 
 def extract_text_page_ocr(pdf_bytes, page_index, dpi=150):
@@ -232,28 +250,19 @@ def extract_all_pages_ocr(pdf_bytes, num_pages_total, dpi=150):
     return ocr_texts
 
 # -----------------------------
-# Grouping function
+# Grouping function (Robust Version)
 # -----------------------------
 def group_pages_by_payslip_from_texts(page_texts, pdf_num_pages):
     groups, current_group = [], []
+    START_MARKER = "FEDERAL GOVERNMENT OF NIGERIA"
     for i, text in enumerate(page_texts):
         text_upper = (text or "").upper()
-        is_start_marker = "FEDERAL GOVERNMENT OF NIGERIA" in text_upper
-        is_end_marker = "TOTAL NET EARNINGS" in text_upper
-
-        if is_start_marker and current_group:
-            groups.append(current_group)
-            current_group = []
-        
-        current_group.append(i)
-
-        if is_end_marker and current_group:
-            groups.append(current_group)
-            current_group = []
-            
-    if current_group:
-        groups.append(current_group)
-
+        if START_MARKER in text_upper:
+            if current_group: groups.append(current_group)
+            current_group = [i]
+        elif current_group:
+            current_group.append(i)
+    if current_group: groups.append(current_group)
     if not groups or (len(groups) == 1 and len(groups[0]) == pdf_num_pages):
         st.info("No distinct payslip markers found. Treating each page as a separate payslip.")
         return [[i] for i in range(pdf_num_pages)]
@@ -267,22 +276,19 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
     try:
         reader = PdfReader(io.BytesIO(input_pdf_bytes))
         num_pages = len(reader.pages)
-        if ocr_mode == "Full OCR":
-            page_texts = extract_all_pages_ocr(input_pdf_bytes, num_pages)
+        if ocr_mode == "Full OCR": page_texts = extract_all_pages_ocr(input_pdf_bytes, num_pages)
         else:
             bar = st.progress(0, text="Extracting text...")
             non_ocr_texts = extract_text_from_pdf_non_ocr(reader)
-            if ocr_mode == "Normal":
-                page_texts = non_ocr_texts
-            else: # Hybrid
+            if ocr_mode == "Normal": page_texts = non_ocr_texts
+            else:
                 page_texts = []
                 for i, txt in enumerate(non_ocr_texts):
                     candidate = txt or ""
                     if len(candidate.strip()) < 80 or not ("FEDERAL GOVERNMENT" in candidate.upper() or re.search(r'\b(20\d{2})\b', candidate)):
                         ocr_txt = extract_text_page_ocr(input_pdf_bytes, i)
                         page_texts.append(ocr_txt if len(ocr_txt.strip()) > len(candidate.strip()) else candidate)
-                    else:
-                        page_texts.append(candidate)
+                    else: page_texts.append(candidate)
                     bar.progress((i+1)/num_pages, text=f"Hybrid extraction (page {i+1}/{num_pages})")
             bar.empty()
         
@@ -291,30 +297,28 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
         for g_idx, group in enumerate(page_groups, start=1):
             writer = PdfWriter()
             merged_text = "\n".join(page_texts[pg] or "" for pg in group)
-            for pg in group:
-                writer.add_page(reader.pages[pg])
+            for pg in group: writer.add_page(reader.pages[pg])
             
-            details = get_details_from_text(merged_text, g_idx)
+            # Pass the ocr_mode to the extraction function
+            details = get_details_from_text(merged_text, g_idx, ocr_mode=ocr_mode)
+            
             info = {'status': "Details Missing", 'selected_for_upload': False}
             if details:
                 info.update({
                     **details,
                     'key': f"{details['year']}_{details['month']}_{details['ippis']}_{g_idx}",
                     'filename': naming_pattern.format(**details) + ".pdf",
-                    'status': "Details Extracted", 'selected_for_upload': True
-                })
+                    'status': "Details Extracted", 'selected_for_upload': True})
             else:
                 info.update({
                     'key': f"no_details_group_{g_idx}",
-                    'filename': f"Payslip_Group_{g_idx}_missing_details.pdf"
-                })
+                    'filename': f"Payslip_Group_{g_idx}_missing_details.pdf"})
 
             buf = io.BytesIO()
             writer.write(buf)
             info['file_bytes'] = buf.getvalue()
             processed.append(info)
             bar.progress(g_idx / len(page_groups), text=f"Processed payslip {g_idx}/{len(page_groups)}")
-        
         bar.empty()
         st.success("✅ All pages processed successfully!")
         return processed
@@ -339,13 +343,9 @@ uploaded_file = st.file_uploader("📂 Upload a PDF containing payslips", type="
 # -----------------------------
 # Session & Log Management
 # -----------------------------
-if 'processed_payslips_data' not in st.session_state:
-    st.session_state.processed_payslips_data = []
-if 'activity_log' not in st.session_state:
-    st.session_state.activity_log = []
-if 'new_file_uploaded' not in st.session_state:
-    st.session_state.new_file_uploaded = False
-
+if 'processed_payslips_data' not in st.session_state: st.session_state.processed_payslips_data = []
+if 'activity_log' not in st.session_state: st.session_state.activity_log = []
+if 'new_file_uploaded' not in st.session_state: st.session_state.new_file_uploaded = False
 UPLOAD_LOG = "uploaded_files.json"
 if 'uploaded_file_keys_log' not in st.session_state:
     st.session_state.uploaded_file_keys_log = set()
@@ -369,8 +369,7 @@ if uploaded_file:
         st.session_state.processed_payslips_data = split_and_rename_pdf_dynamic(
             uploaded_file.getvalue(),
             ocr_mode=st.session_state.user_prefs.get("ocr_mode", "Hybrid"),
-            naming_pattern=st.session_state.user_prefs.get("naming_pattern", "{year} {month} {ippis}")
-        )
+            naming_pattern=st.session_state.user_prefs.get("naming_pattern", "{year} {month} {ippis}"))
         for item in st.session_state.processed_payslips_data:
             item['upload_status_detail'] = 'Already uploaded' if item.get('key') in st.session_state.uploaded_file_keys_log else 'Pending'
             if item['upload_status_detail'] == 'Already uploaded' or item['status'] != "Details Extracted":
@@ -382,21 +381,17 @@ if uploaded_file:
 if st.session_state.processed_payslips_data:
     st.markdown("---")
     st.subheader("📊 Review & Select Payslips")
-
     col_sel_all, col_desel_all = st.columns(2)
     if col_sel_all.button("✅ Select All Valid for Upload", key="select_all"):
         for item in st.session_state.processed_payslips_data:
             if item.get('upload_status_detail') != 'Already uploaded' and item['status'] == 'Details Extracted':
                 item['selected_for_upload'] = True
     if col_desel_all.button("❌ Deselect All for Upload", key="deselect_all"):
-        for item in st.session_state.processed_payslips_data:
-            item['selected_for_upload'] = False
+        for item in st.session_state.processed_payslips_data: item['selected_for_upload'] = False
 
     display_data = [{"Selected": item['selected_for_upload'], "Filename": item.get('filename'), "Year": item.get('year', '-'), "Month": item.get('month', '-'), "IPPIS": item.get('ippis', '-'), "Processing Status": item.get('status'), "Upload Status": item.get('upload_status_detail')} for item in st.session_state.processed_payslips_data]
     edited_data = st.data_editor(display_data, column_config={"Selected": st.column_config.CheckboxColumn("Upload?", help="Select to upload")}, hide_index=True, key="payslip_editor")
-
-    for i, row in enumerate(edited_data):
-        st.session_state.processed_payslips_data[i]['selected_for_upload'] = row['Selected']
+    for i, row in enumerate(edited_data): st.session_state.processed_payslips_data[i]['selected_for_upload'] = row['Selected']
 
     tab_drive, tab_download = st.tabs(["☁️ Google Drive Actions", "💻 Local Download"])
 
@@ -410,37 +405,28 @@ if st.session_state.processed_payslips_data:
                     st.session_state.activity_log = []
                     total_to_upload = len(selected)
                     add_to_log(f"Starting upload of {total_to_upload} files...")
-                    
                     log_placeholder = st.empty()
                     MAX_RETRIES, RETRY_DELAY = 3, 2
-
                     for idx, item in enumerate(selected):
                         progress_prefix = f"({idx + 1}/{total_to_upload})"
-
                         with log_placeholder.expander("Live Activity Log", expanded=True):
                             for log in st.session_state.activity_log:
                                 if log['status'] == 'success': st.success(log['message'])
                                 elif log['status'] == 'error': st.error(log['message'])
                                 elif log['status'] == 'warning': st.warning(log['message'])
                                 else: st.info(log['message'])
-                        
                         uploaded = False
                         for attempt in range(1, MAX_RETRIES + 1):
                             try:
                                 add_to_log(f"{progress_prefix} 🚀 Uploading '{item['filename']}' (Attempt {attempt})...")
                                 file_id = upload_file_to_google_drive(service, item['filename'], item['file_bytes'])
                                 item['upload_status_detail'] = f"Uploaded (ID: {file_id})"
-                                
-                                # --- ATOMIC SAVE LOGIC ---
-                                # 1. Add key to in-memory log
                                 st.session_state.uploaded_file_keys_log.add(item['key'])
-                                # 2. Immediately save the updated log to disk
                                 try:
                                     with open(UPLOAD_LOG, "w") as f:
                                         json.dump(list(st.session_state.uploaded_file_keys_log), f)
                                 except Exception as e:
                                     add_to_log(f"CRITICAL: Could not save upload log to disk! {e}", "error")
-
                                 add_to_log(f"{progress_prefix} ✅ Success: '{item['filename']}'.", status="success")
                                 uploaded = True
                                 break 
@@ -451,7 +437,6 @@ if st.session_state.processed_payslips_data:
                                 else:
                                     item['upload_status_detail'] = f"Failed: {e}"
                                     add_to_log(f"{progress_prefix} ❌ Final upload failed for '{item['filename']}': {e}", "error")
-                    
                     add_to_log(f"🏁 Batch upload process complete. Processed {total_to_upload} selected files.", "info")
                     with log_placeholder.expander("Live Activity Log", expanded=True):
                         for log in st.session_state.activity_log:
@@ -459,12 +444,9 @@ if st.session_state.processed_payslips_data:
                             elif log['status'] == 'error': st.error(log['message'])
                             elif log['status'] == 'warning': st.warning(log['message'])
                             else: st.info(log['message'])
-                    
                     st.success("Google Drive upload process finished. See log for details.")
-                else:
-                    st.error("Google Drive authentication failed.")
-        else:
-            st.info("Google Drive features are disabled.")
+                else: st.error("Google Drive authentication failed.")
+        else: st.info("Google Drive features are disabled.")
 
     with tab_download:
         if st.session_state.user_prefs.get("enable_local_download", True):
@@ -475,12 +457,10 @@ if st.session_state.processed_payslips_data:
                         if 'filename' in item and 'file_bytes' in item:
                             zf.writestr(item['filename'], item['file_bytes'])
                 return buf.getvalue()
-
             matched = [item for item in st.session_state.processed_payslips_data if item['status'] == "Details Extracted"]
             if matched: st.download_button("⬇️ Download Matched (ZIP)", data=create_zip(matched), file_name="Matched_Payslips.zip", mime="application/zip")
             if st.session_state.processed_payslips_data: st.download_button("⬇️ Download All Processed (ZIP)", data=create_zip(st.session_state.processed_payslips_data), file_name="All_Processed_Payslips.zip", mime="application/zip")
-        else:
-            st.info("Local download is disabled.")
+        else: st.info("Local download is disabled.")
 
     # Admin Sidebar
     st.sidebar.markdown("### 🔐 Admin Login")
