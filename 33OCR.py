@@ -11,14 +11,6 @@ import streamlit as st
 import platform
 import os 
 import traceback 
-import slugify # Library for creating safe filenames (Streamlit Cloud often has this) 
-               # Fallback to simple replace if import fails
-try:
-    from slugify import slugify
-except ImportError:
-    def slugify(value, separator='_'):
-        value = re.sub(r'[^\w\s-]', '', value).strip().lower()
-        return re.sub(r'[-\s]+', separator, value)
 
 from PyPDF2 import PdfReader, PdfWriter
 from google.oauth2 import service_account
@@ -30,7 +22,27 @@ from googleapiclient.errors import HttpError
 from pdf2image import convert_from_bytes
 import pytesseract
 
-# --- TESSERACT PATH CONFIGURATION REMAINS UNCHANGED ---
+# --- Custom Safe Slugify Function (Standard Library Only - FIX) ---
+def safe_slugify(value, separator='_'):
+    """
+    Converts a string to a safe slug format using only standard Python libraries.
+    Removes file extensions, converts to lowercase, removes non-alphanumeric chars,
+    and replaces spaces/underscores/hyphens with a single separator.
+    """
+    # 1. Ensure value is a string and handle non-ASCII/whitespace
+    value = str(value).strip().lower()
+    
+    # 2. Remove file extension if present (e.g., .pdf)
+    value, _ = os.path.splitext(value)
+    
+    # 3. Replace non-alphanumeric characters (except spaces, hyphens, and underscores) with nothing
+    value = re.sub(r'[^\w\s-]', '', value)
+    
+    # 4. Replace spaces, underscores, and multiple hyphens/separators with a single separator
+    return re.sub(r'[-\s_]+', separator, value)
+# -----------------------------------------------------------------
+
+# Set tesseract path only on Windows
 if platform.system() == "Windows":
     possible_paths = [
         r"C:\Program Files\Tesseract-OCR\tesseract.exe",
@@ -298,7 +310,7 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
         # 1. Text Extraction (OCR/Hybrid/Normal)
         if ocr_mode == "Full OCR": page_texts = extract_all_pages_ocr(input_pdf_bytes, num_pages)
         else:
-            bar = st.progress(0, text="Extracting text...")
+            bar = st.progress(0, text=f"Extracting text from {original_file_prefix}...")
             non_ocr_texts = extract_text_from_pdf_non_ocr(reader)
             if ocr_mode == "Normal": page_texts = non_ocr_texts
             else:
@@ -314,7 +326,7 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
         
         # 2. Grouping
         page_groups = group_pages_by_payslip_from_texts(page_texts, num_pages)
-        bar = st.progress(0, text=f"Processing {len(page_groups)} payslips...")
+        bar = st.progress(0, text=f"Processing {len(page_groups)} payslips from {original_file_prefix}...")
         
         # 3. Splitting, Naming, and Temp Save
         for g_idx, group in enumerate(page_groups, start=1):
@@ -353,7 +365,6 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
             bar.progress(g_idx / len(page_groups), text=f"Processed payslip {g_idx}/{len(page_groups)}")
         
         bar.empty()
-        st.success(f"✅ File '{original_file_prefix}' processed successfully! Found {len(page_groups)} payslip groups.")
         return processed
         
     except Exception as e:
@@ -362,7 +373,7 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
         return []
 
 # -----------------------------
-# Session & Log Management (UNITS REMAINS UNCHANGED)
+# Session & Log Management 
 # -----------------------------
 UPLOAD_LOG = "uploaded_files.json"
 
@@ -426,21 +437,24 @@ if uploaded_files:
         
         # --- NEW MULTI-FILE PROCESSING LOOP ---
         all_processed_data = []
+        progress_bar_total = st.progress(0, text=f"Processing 0 of {len(uploaded_files)} files...")
+        
         for i, uploaded_file in enumerate(uploaded_files):
+            progress_bar_total.progress((i)/len(uploaded_files), text=f"Processing file {i+1}/{len(uploaded_files)}: **{uploaded_file.name}**")
+            
             # Create a clean prefix for unique identification
-            # Use original file name without extension, and slugify for safety
-            file_name_clean = slugify(os.path.splitext(uploaded_file.name)[0])
-
-            st.info(f"Starting processing of file {i+1}/{len(uploaded_files)}: **{uploaded_file.name}**")
-
+            file_name_clean = safe_slugify(uploaded_file.name) # ***UPDATED TO USE safe_slugify***
+            
             results = split_and_rename_pdf_dynamic(
                 uploaded_file.getvalue(),
                 ocr_mode=st.session_state.user_prefs.get("ocr_mode", "Hybrid"),
                 naming_pattern=st.session_state.user_prefs.get("naming_pattern", "{year} {month} {ippis}"),
-                original_file_prefix=file_name_clean) # Pass the unique prefix
+                original_file_prefix=file_name_clean) 
             
             all_processed_data.extend(results)
 
+        progress_bar_total.progress(1.0, text=f"✅ Finished processing {len(uploaded_files)} files.")
+        progress_bar_total.empty()
         st.session_state.processed_payslips_data = all_processed_data
 
         for item in st.session_state.processed_payslips_data:
