@@ -5,16 +5,16 @@ import re
 import json
 import time
 import zipfile
-import tempfile # Added/Ensured
+import tempfile 
 import base64
 import streamlit as st
 import platform
-import os # Added/Ensured
+import os 
+import traceback # Added for clearer error logging
 
 from PyPDF2 import PdfReader, PdfWriter
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-# Using MediaIoBaseUpload for resumable uploads
 from googleapiclient.http import MediaIoBaseUpload 
 from googleapiclient.errors import HttpError
 
@@ -165,6 +165,7 @@ def authenticate_google_drive():
 # MODIFIED: Accepts file_path instead of file_bytes to reduce memory usage
 def upload_file_to_google_drive(service, filename, file_path, mime_type="application/pdf"):
     """Uploads a file reading from a local path, enabling resumable upload."""
+    f = None
     try:
         file_metadata = {"name": filename, "parents": [GOOGLE_DRIVE_FOLDER_ID]}
         
@@ -174,15 +175,14 @@ def upload_file_to_google_drive(service, filename, file_path, mime_type="applica
         media = MediaIoBaseUpload(f, mimetype=mime_type, resumable=True) 
         
         file = service.files().create(body=file_metadata, media_body=media, fields="id", supportsAllDrives=True).execute()
-        f.close()
         return file.get("id")
     except HttpError as e:
         # Re-raise specific HttpErrors to allow the retry loop to handle them
-        f.close()
         raise
     except Exception as e:
-        f.close()
         raise
+    finally:
+        if f: f.close()
 
 # -----------------------------
 # Text/detail extraction utilities (FINAL VERSION)
@@ -248,7 +248,7 @@ def extract_text_from_pdf_non_ocr(reader):
         except Exception: texts.append("")
     return texts
 
-def extract_text_page_ocr(pdf_bytes, page_index, dpi=120): # DPI lowered from 150 to 120 to save memory/time
+def extract_text_page_ocr(pdf_bytes, page_index, dpi=120):
     try:
         # Ensure we are not passing an excessively high DPI to pdf2image
         pages = convert_from_bytes(pdf_bytes, dpi=dpi, first_page=page_index+1, last_page=page_index+1)
@@ -257,7 +257,7 @@ def extract_text_page_ocr(pdf_bytes, page_index, dpi=120): # DPI lowered from 15
         st.warning(f"OCR page {page_index+1} failed: {e}")
         return ""
 
-def extract_all_pages_ocr(pdf_bytes, num_pages_total, dpi=120): # DPI lowered
+def extract_all_pages_ocr(pdf_bytes, num_pages_total, dpi=120):
     ocr_texts = []
     bar = st.progress(0, text=f"Performing Full OCR on {num_pages_total} pages...")
     for i in range(num_pages_total):
@@ -336,6 +336,8 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
             buf = io.BytesIO()
             writer.write(buf)
             
+            # Use delete=False because Streamlit keeps the temp files until script rerun/session end.
+            # We explicitly clean them up in cleanup_temp_files().
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                 tmp.write(buf.getvalue())
                 info['temp_file_path'] = tmp.name
@@ -350,7 +352,6 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
         return processed
     except Exception as e:
         st.error(f"Error while processing PDF: {e}")
-        import traceback
         st.error(traceback.format_exc())
         return []
 
@@ -373,7 +374,8 @@ def cleanup_temp_files():
                 except Exception as e:
                     # Log cleanup failure but don't stop the app
                     add_to_log(f"Failed to clean up temp file {path} during reset: {e}", "warning")
-        st.session_state.processed_payslips_data = [] # Clear the list after cleanup
+        # Do NOT clear st.session_state.processed_payslips_data here. It will be cleared 
+        # when a new file is successfully uploaded/processed.
 
 if 'processed_payslips_data' not in st.session_state: st.session_state.processed_payslips_data = []
 if 'activity_log' not in st.session_state: st.session_state.activity_log = []
@@ -386,17 +388,8 @@ if 'uploaded_file_keys_log' not in st.session_state:
                 st.session_state.uploaded_file_keys_log = set(json.load(f))
         except Exception: pass
 
-# New logic for uploaded file reset and cleanup
-if uploaded_file and not st.session_state.new_file_uploaded:
-    cleanup_temp_files() # Clear old data and temp files
-    st.session_state.activity_log = []
-    st.session_state.new_file_uploaded = True
-elif not uploaded_file and st.session_state.new_file_uploaded:
-    cleanup_temp_files() 
-    st.session_state.new_file_uploaded = False
-
 # -----------------------------
-# App Instructions & Uploader
+# App Instructions & Uploader (MOVED UP FOR DEFINITION)
 # -----------------------------
 st.markdown("""
 Upload a multi-page PDF containing payslips. The app can:
@@ -405,13 +398,33 @@ Upload a multi-page PDF containing payslips. The app can:
 - use OCR (full/hybrid) for scanned PDFs,
 - allow review and selective upload to Google Drive and/or provide ZIP downloads.
 """)
+# --- VARIABLE DEFINITION IS HERE ---
 uploaded_file = st.file_uploader("📂 Upload a PDF containing payslips", type="pdf", help="Drag & drop or click to browse")
+# -----------------------------------
+
+
+# New logic for uploaded file reset and cleanup (Now works as uploaded_file is defined)
+if uploaded_file and not st.session_state.new_file_uploaded:
+    # A new file has just been uploaded (uploaded_file is True, but new_file_uploaded is False)
+    cleanup_temp_files() # Clear old data and temp files
+    st.session_state.processed_payslips_data = [] # Clear the displayed data now
+    st.session_state.activity_log = []
+    st.session_state.new_file_uploaded = True
+elif not uploaded_file and st.session_state.new_file_uploaded:
+    # File has been cleared by the user (uploaded_file is None, but new_file_uploaded was True)
+    cleanup_temp_files() 
+    st.session_state.processed_payslips_data = [] # Clear the displayed data
+    st.session_state.new_file_uploaded = False
+
 
 if uploaded_file:
     if st.button("🚀 Split & Process Payslips", key="process_button"):
-        # Cleanup any existing data before processing
-        cleanup_temp_files() 
         
+        # Explicitly clear any stale log/data just before processing
+        cleanup_temp_files() 
+        st.session_state.processed_payslips_data = [] 
+        st.session_state.activity_log = []
+
         st.session_state.processed_payslips_data = split_and_rename_pdf_dynamic(
             uploaded_file.getvalue(),
             ocr_mode=st.session_state.user_prefs.get("ocr_mode", "Hybrid"),
@@ -491,6 +504,9 @@ if st.session_state.processed_payslips_data:
                         if not file_path or not os.path.exists(file_path):
                             item['upload_status_detail'] = "Failed: File missing from disk"
                             add_to_log(f"{progress_prefix} ❌ Critical: Payslip file not found on disk for '{item['filename']}'. Skipping.", "error")
+                            # Keep selected=True and status=Final Failure to signal to user they need to re-process the PDF
+                            item['selected_for_upload'] = True
+                            item['upload_status_detail'] = "Final Failure (Missing File)" 
                             continue # Skip this item
                             
                         for attempt in range(1, MAX_RETRIES + 1):
@@ -501,6 +517,7 @@ if st.session_state.processed_payslips_data:
                                 file_id = upload_file_to_google_drive(service, item['filename'], file_path)
                                 
                                 item['upload_status_detail'] = f"Uploaded (ID: {file_id})"
+                                item['selected_for_upload'] = False # Deselect once successfully uploaded
                                 st.session_state.uploaded_file_keys_log.add(item['key'])
                                 try:
                                     with open(UPLOAD_LOG, "w") as f:
@@ -510,8 +527,11 @@ if st.session_state.processed_payslips_data:
                                 add_to_log(f"{progress_prefix} ✅ Success: '{item['filename']}'.", status="success")
                                 uploaded = True
                                 # After successful upload, remove the temp file
-                                os.remove(file_path) 
-                                del item['temp_file_path']
+                                try:
+                                    os.remove(file_path) 
+                                    del item['temp_file_path']
+                                except Exception as e:
+                                    add_to_log(f"Warning: Failed to delete temp file {file_path}. {e}", "warning")
                                 break 
                                 
                             except Exception as e:
@@ -551,8 +571,11 @@ if st.session_state.processed_payslips_data:
                     for item in items:
                         path = item.get('temp_file_path')
                         if 'filename' in item and path and os.path.exists(path):
-                            with open(path, "rb") as f:
-                                zf.writestr(item['filename'], f.read())
+                            try:
+                                with open(path, "rb") as f:
+                                    zf.writestr(item['filename'], f.read())
+                            except Exception as e:
+                                add_to_log(f"Warning: Could not read temp file {path} for ZIP. {e}", "warning")
                 return buf.getvalue()
             
             matched = [item for item in st.session_state.processed_payslips_data if item['status'] == "Details Extracted"]
