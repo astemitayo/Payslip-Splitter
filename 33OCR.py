@@ -10,7 +10,15 @@ import base64
 import streamlit as st
 import platform
 import os 
-import traceback # Added for clearer error logging
+import traceback 
+import slugify # Library for creating safe filenames (Streamlit Cloud often has this) 
+               # Fallback to simple replace if import fails
+try:
+    from slugify import slugify
+except ImportError:
+    def slugify(value, separator='_'):
+        value = re.sub(r'[^\w\s-]', '', value).strip().lower()
+        return re.sub(r'[-\s]+', separator, value)
 
 from PyPDF2 import PdfReader, PdfWriter
 from google.oauth2 import service_account
@@ -22,7 +30,7 @@ from googleapiclient.errors import HttpError
 from pdf2image import convert_from_bytes
 import pytesseract
 
-# Set tesseract path only on Windows
+# --- TESSERACT PATH CONFIGURATION REMAINS UNCHANGED ---
 if platform.system() == "Windows":
     possible_paths = [
         r"C:\Program Files\Tesseract-OCR\tesseract.exe",
@@ -34,12 +42,8 @@ if platform.system() == "Windows":
             break
     else:
         st.error("Tesseract not found on your system. Install from UB Mannheim release.")
-else:
-    # Linux (Streamlit Cloud) — do NOT set the path
-    pass
-
 # -----------------------------
-# Persistent User Preferences
+# Persistent User Preferences (UNITS REMAINS UNCHANGED)
 # -----------------------------
 PREF_FILE = "user_prefs.json"
 
@@ -66,7 +70,7 @@ for k, v in _defaults.items():
     st.session_state.user_prefs.setdefault(k, v)
 
 # -----------------------------
-# UI - Sidebar Settings
+# UI - Sidebar Settings (REMAINS UNCHANGED)
 # -----------------------------
 st.sidebar.header("⚙️ Settings")
 
@@ -110,7 +114,7 @@ except Exception:
     st.warning("Could not save preferences to disk (permissions?). Preferences will persist only in this session.")
 
 # -----------------------------
-# Page config & styling
+# Page config & styling (REMAINS UNCHANGED)
 # -----------------------------
 st.set_page_config(page_title="ARMTI Payslip Manager", page_icon="assets/ARMTI.png", layout="wide")
 
@@ -141,7 +145,7 @@ st.markdown(
 )
 
 # -----------------------------
-# Google Drive helpers (Modified for file path input)
+# Google Drive helpers (REMAINS UNCHANGED)
 # -----------------------------
 SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive']
 
@@ -162,22 +166,16 @@ def authenticate_google_drive():
         st.error(f"Google Drive authentication failed: {e}")
         return None
 
-# MODIFIED: Accepts file_path instead of file_bytes to reduce memory usage
 def upload_file_to_google_drive(service, filename, file_path, mime_type="application/pdf"):
     """Uploads a file reading from a local path, enabling resumable upload."""
     f = None
     try:
         file_metadata = {"name": filename, "parents": [GOOGLE_DRIVE_FOLDER_ID]}
-        
-        # Open file from disk for upload
         f = open(file_path, "rb")
-        # Added resumable=True for better network failure handling
         media = MediaIoBaseUpload(f, mimetype=mime_type, resumable=True) 
-        
         file = service.files().create(body=file_metadata, media_body=media, fields="id", supportsAllDrives=True).execute()
         return file.get("id")
     except HttpError as e:
-        # Re-raise specific HttpErrors to allow the retry loop to handle them
         raise
     except Exception as e:
         raise
@@ -185,7 +183,7 @@ def upload_file_to_google_drive(service, filename, file_path, mime_type="applica
         if f: f.close()
 
 # -----------------------------
-# Text/detail extraction utilities (FINAL VERSION)
+# Text/detail extraction utilities (REMAINS UNCHANGED)
 # -----------------------------
 def get_details_from_text(merged_text, group_idx=None, ocr_mode="Hybrid"):
     if not merged_text:
@@ -239,7 +237,7 @@ def get_details_from_text(merged_text, group_idx=None, ocr_mode="Hybrid"):
     return None
 
 # -----------------------------
-# Core text extraction helpers
+# Core text extraction helpers (REMAINS UNCHANGED)
 # -----------------------------
 def extract_text_from_pdf_non_ocr(reader):
     texts = []
@@ -250,7 +248,6 @@ def extract_text_from_pdf_non_ocr(reader):
 
 def extract_text_page_ocr(pdf_bytes, page_index, dpi=120):
     try:
-        # Ensure we are not passing an excessively high DPI to pdf2image
         pages = convert_from_bytes(pdf_bytes, dpi=dpi, first_page=page_index+1, last_page=page_index+1)
         return pytesseract.image_to_string(pages[0]) if pages else ""
     except Exception as e:
@@ -267,7 +264,7 @@ def extract_all_pages_ocr(pdf_bytes, num_pages_total, dpi=120):
     return ocr_texts
 
 # -----------------------------
-# Grouping function (Robust Version)
+# Grouping function (REMAINS UNCHANGED)
 # -----------------------------
 def group_pages_by_payslip_from_texts(page_texts, pdf_num_pages):
     groups, current_group = [], []
@@ -286,13 +283,19 @@ def group_pages_by_payslip_from_texts(page_texts, pdf_num_pages):
     return groups
 
 # -----------------------------
-# Unified splitting function (Modified to save to tempfile)
+# Unified splitting function (MODIFIED for uniqueness)
 # -----------------------------
-def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_pattern="{year} {month} {ippis}"):
+def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_pattern="{year} {month} {ippis}", original_file_prefix="Payslip"):
+    """
+    Splits PDF pages into payslips, extracts details, and saves to temp files.
+    'original_file_prefix' is used to ensure unique filenames/keys across multiple uploaded files.
+    """
     processed = []
     try:
         reader = PdfReader(io.BytesIO(input_pdf_bytes))
         num_pages = len(reader.pages)
+        
+        # 1. Text Extraction (OCR/Hybrid/Normal)
         if ocr_mode == "Full OCR": page_texts = extract_all_pages_ocr(input_pdf_bytes, num_pages)
         else:
             bar = st.progress(0, text="Extracting text...")
@@ -303,15 +306,17 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
                 for i, txt in enumerate(non_ocr_texts):
                     candidate = txt or ""
                     if len(candidate.strip()) < 80 or not ("FEDERAL GOVERNMENT" in candidate.upper() or re.search(r'\b(20\d{2})\b', candidate)):
-                        # If extraction is poor or non-existent, run OCR as fallback
                         ocr_txt = extract_text_page_ocr(input_pdf_bytes, i)
                         page_texts.append(ocr_txt if len(ocr_txt.strip()) > len(candidate.strip()) else candidate)
                     else: page_texts.append(candidate)
                     bar.progress((i+1)/num_pages, text=f"Hybrid extraction (page {i+1}/{num_pages})")
             bar.empty()
         
+        # 2. Grouping
         page_groups = group_pages_by_payslip_from_texts(page_texts, num_pages)
         bar = st.progress(0, text=f"Processing {len(page_groups)} payslips...")
+        
+        # 3. Splitting, Naming, and Temp Save
         for g_idx, group in enumerate(page_groups, start=1):
             writer = PdfWriter()
             merged_text = "\n".join(page_texts[pg] or "" for pg in group)
@@ -319,44 +324,45 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
             
             details = get_details_from_text(merged_text, g_idx, ocr_mode=ocr_mode)
             
-            info = {'status': "Details Missing", 'selected_for_upload': False}
+            info = {'status': "Details Missing", 'selected_for_upload': False, 'original_file_name': original_file_prefix}
+            
             if details:
+                core_filename = naming_pattern.format(**details)
                 info.update({
                     **details,
-                    'key': f"{details['year']}_{details['month']}_{details['ippis']}_{g_idx}",
-                    'filename': naming_pattern.format(**details) + ".pdf",
+                    # Ensure the key is globally unique with the original file prefix
+                    'key': f"{original_file_prefix}_{details['year']}_{details['month']}_{details['ippis']}_{g_idx}",
+                    # Ensure the filename is globally unique 
+                    'filename': f"[{original_file_prefix}] {core_filename}.pdf",
                     'status': "Details Extracted", 'selected_for_upload': True})
             else:
                 info.update({
-                    'key': f"no_details_group_{g_idx}",
-                    'filename': f"Payslip_Group_{g_idx}_missing_details.pdf"})
+                    # Key for missing details must also be unique
+                    'key': f"{original_file_prefix}_no_details_group_{g_idx}",
+                    'filename': f"[{original_file_prefix}] Payslip_Group_{g_idx}_missing_details.pdf"})
 
-            # --- START MEMORY-SAVING CHANGE ---
-            # Save the split PDF to a temporary file and store the path
+            # Save to temporary file
             buf = io.BytesIO()
             writer.write(buf)
             
-            # Use delete=False because Streamlit keeps the temp files until script rerun/session end.
-            # We explicitly clean them up in cleanup_temp_files().
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                 tmp.write(buf.getvalue())
                 info['temp_file_path'] = tmp.name
-                
-            # Removed: info['file_bytes'] = buf.getvalue() - This caused high memory usage
-            # --- END MEMORY-SAVING CHANGE ---
             
             processed.append(info)
             bar.progress(g_idx / len(page_groups), text=f"Processed payslip {g_idx}/{len(page_groups)}")
+        
         bar.empty()
-        st.success("✅ All pages processed successfully!")
+        st.success(f"✅ File '{original_file_prefix}' processed successfully! Found {len(page_groups)} payslip groups.")
         return processed
+        
     except Exception as e:
-        st.error(f"Error while processing PDF: {e}")
+        st.error(f"Error while processing PDF '{original_file_prefix}': {e}")
         st.error(traceback.format_exc())
         return []
 
 # -----------------------------
-# Session & Log Management (Added Temp File Cleanup)
+# Session & Log Management (UNITS REMAINS UNCHANGED)
 # -----------------------------
 UPLOAD_LOG = "uploaded_files.json"
 
@@ -366,17 +372,15 @@ def add_to_log(message, status="info"):
 def cleanup_temp_files():
     """Removes temporary files associated with processed payslips to free disk space."""
     if 'processed_payslips_data' in st.session_state:
-        for item in st.session_state.processed_payslips_data:
-            path = item.get('temp_file_path')
-            if path and os.path.exists(path):
+        # Create a list of paths to delete and then clear the session list
+        paths_to_delete = [item.get('temp_file_path') for item in st.session_state.processed_payslips_data if item.get('temp_file_path')]
+        for path in paths_to_delete:
+            if os.path.exists(path):
                 try:
                     os.remove(path)
                 except Exception as e:
-                    # Log cleanup failure but don't stop the app
                     add_to_log(f"Failed to clean up temp file {path} during reset: {e}", "warning")
-        # Do NOT clear st.session_state.processed_payslips_data here. It will be cleared 
-        # when a new file is successfully uploaded/processed.
-
+        
 if 'processed_payslips_data' not in st.session_state: st.session_state.processed_payslips_data = []
 if 'activity_log' not in st.session_state: st.session_state.activity_log = []
 if 'new_file_uploaded' not in st.session_state: st.session_state.new_file_uploaded = False
@@ -389,49 +393,58 @@ if 'uploaded_file_keys_log' not in st.session_state:
         except Exception: pass
 
 # -----------------------------
-# App Instructions & Uploader (MOVED UP FOR DEFINITION)
+# App Instructions & Uploader (MODIFIED FOR MULTIPLE FILES)
 # -----------------------------
 st.markdown("""
-Upload a multi-page PDF containing payslips. The app can:
-- split single-page payslips,
-- group multi-page payslips (detected via markers),
-- use OCR (full/hybrid) for scanned PDFs,
-- allow review and selective upload to Google Drive and/or provide ZIP downloads.
+Upload **multiple** multi-page PDFs containing payslips.
 """)
-# --- VARIABLE DEFINITION IS HERE ---
-uploaded_file = st.file_uploader("📂 Upload a PDF containing payslips", type="pdf", help="Drag & drop or click to browse")
+# --- VARIABLE DEFINITION (PLURAL) ---
+uploaded_files = st.file_uploader("📂 Upload PDF files containing payslips", type="pdf", accept_multiple_files=True, help="Drag & drop or click to browse multiple files")
 # -----------------------------------
 
 
-# New logic for uploaded file reset and cleanup (Now works as uploaded_file is defined)
-if uploaded_file and not st.session_state.new_file_uploaded:
-    # A new file has just been uploaded (uploaded_file is True, but new_file_uploaded is False)
-    cleanup_temp_files() # Clear old data and temp files
-    st.session_state.processed_payslips_data = [] # Clear the displayed data now
+# New logic for uploaded file reset and cleanup (Uses list check)
+if uploaded_files and not st.session_state.new_file_uploaded:
+    # New file(s) uploaded
+    cleanup_temp_files() 
+    st.session_state.processed_payslips_data = [] 
     st.session_state.activity_log = []
     st.session_state.new_file_uploaded = True
-elif not uploaded_file and st.session_state.new_file_uploaded:
-    # File has been cleared by the user (uploaded_file is None, but new_file_uploaded was True)
+elif not uploaded_files and st.session_state.new_file_uploaded:
+    # File list cleared by the user
     cleanup_temp_files() 
-    st.session_state.processed_payslips_data = [] # Clear the displayed data
+    st.session_state.processed_payslips_data = [] 
     st.session_state.new_file_uploaded = False
 
-
-if uploaded_file:
-    if st.button("🚀 Split & Process Payslips", key="process_button"):
+if uploaded_files:
+    if st.button(f"🚀 Split & Process {len(uploaded_files)} Payslip Files", key="process_button"):
         
         # Explicitly clear any stale log/data just before processing
         cleanup_temp_files() 
         st.session_state.processed_payslips_data = [] 
         st.session_state.activity_log = []
-
-        st.session_state.processed_payslips_data = split_and_rename_pdf_dynamic(
-            uploaded_file.getvalue(),
-            ocr_mode=st.session_state.user_prefs.get("ocr_mode", "Hybrid"),
-            naming_pattern=st.session_state.user_prefs.get("naming_pattern", "{year} {month} {ippis}"))
         
+        # --- NEW MULTI-FILE PROCESSING LOOP ---
+        all_processed_data = []
+        for i, uploaded_file in enumerate(uploaded_files):
+            # Create a clean prefix for unique identification
+            # Use original file name without extension, and slugify for safety
+            file_name_clean = slugify(os.path.splitext(uploaded_file.name)[0])
+
+            st.info(f"Starting processing of file {i+1}/{len(uploaded_files)}: **{uploaded_file.name}**")
+
+            results = split_and_rename_pdf_dynamic(
+                uploaded_file.getvalue(),
+                ocr_mode=st.session_state.user_prefs.get("ocr_mode", "Hybrid"),
+                naming_pattern=st.session_state.user_prefs.get("naming_pattern", "{year} {month} {ippis}"),
+                original_file_prefix=file_name_clean) # Pass the unique prefix
+            
+            all_processed_data.extend(results)
+
+        st.session_state.processed_payslips_data = all_processed_data
+
         for item in st.session_state.processed_payslips_data:
-            # New condition for failed upload status persistence
+            # Check for upload log status using the *unique* key
             if item.get('key') in st.session_state.uploaded_file_keys_log:
                 item['upload_status_detail'] = 'Already uploaded'
                 item['selected_for_upload'] = False
@@ -439,16 +452,15 @@ if uploaded_file:
                 item['upload_status_detail'] = 'Pending'
                 item['selected_for_upload'] = False
             else:
-                # Default for newly processed valid files
                 item['upload_status_detail'] = 'Pending'
 
 
 # -----------------------------
-# Review & Actions UI
+# Review & Actions UI (MODIFIED for original file display)
 # -----------------------------
 if st.session_state.processed_payslips_data:
     st.markdown("---")
-    st.subheader("📊 Review & Select Payslips")
+    st.subheader(f"📊 Review & Select Payslips ({len(st.session_state.processed_payslips_data)} total)")
     
     # Check for any items marked 'Final Failure (Retry needed)' and re-select them automatically
     for item in st.session_state.processed_payslips_data:
@@ -458,14 +470,22 @@ if st.session_state.processed_payslips_data:
     col_sel_all, col_desel_all = st.columns(2)
     if col_sel_all.button("✅ Select All Valid for Upload / Retry", key="select_all"):
         for item in st.session_state.processed_payslips_data:
-            # Select all that are not already uploaded and have details
             if item.get('upload_status_detail') != 'Already uploaded' and item['status'] == 'Details Extracted':
                 item['selected_for_upload'] = True
     if col_desel_all.button("❌ Deselect All for Upload", key="deselect_all"):
         for item in st.session_state.processed_payslips_data: item['selected_for_upload'] = False
 
-    display_data = [{"Selected": item['selected_for_upload'], "Filename": item.get('filename'), "Year": item.get('year', '-'), "Month": item.get('month', '-'), "IPPIS": item.get('ippis', '-'), "Processing Status": item.get('status'), "Upload Status": item.get('upload_status_detail')} for item in st.session_state.processed_payslips_data]
-    edited_data = st.data_editor(display_data, column_config={"Selected": st.column_config.CheckboxColumn("Upload?", help="Select to upload")}, hide_index=True, key="payslip_editor")
+    # ADDED 'Original File' column
+    display_data = [{"Selected": item['selected_for_upload'], "Original File": item.get('original_file_name'), "Filename": item.get('filename'), "Year": item.get('year', '-'), "Month": item.get('month', '-'), "IPPIS": item.get('ippis', '-'), "Processing Status": item.get('status'), "Upload Status": item.get('upload_status_detail')} for item in st.session_state.processed_payslips_data]
+    edited_data = st.data_editor(
+        display_data, 
+        column_config={
+            "Selected": st.column_config.CheckboxColumn("Upload?", help="Select to upload"),
+            "Original File": st.column_config.TextColumn("Source File", help="Original PDF file name (cleaned)")
+        }, 
+        hide_index=True, 
+        key="payslip_editor"
+    )
     for i, row in enumerate(edited_data): st.session_state.processed_payslips_data[i]['selected_for_upload'] = row['Selected']
 
     tab_drive, tab_download = st.tabs(["☁️ Google Drive Actions", "💻 Local Download"])
@@ -475,7 +495,7 @@ if st.session_state.processed_payslips_data:
             selected = [item for item in st.session_state.processed_payslips_data if item['selected_for_upload']]
             st.info(f"You have **{len(selected)}** payslips selected for Google Drive upload/retry.")
             
-            # --- START UPLOAD RESILIENCE CHANGES ---
+            # --- UPLOAD RESILIENCE CHANGES (REMAINS UNCHANGED, USES NEW KEYS/PATHS) ---
             if st.button("⬆️ Upload Selected to Google Drive", key="upload_button", disabled=not selected):
                 service = authenticate_google_drive()
                 if service:
@@ -483,7 +503,6 @@ if st.session_state.processed_payslips_data:
                     total_to_upload = len(selected)
                     add_to_log(f"Starting upload of {total_to_upload} files...")
                     log_placeholder = st.empty()
-                    # Increased retries and setup for exponential backoff
                     MAX_RETRIES, RETRY_DELAY = 5, 2 
                     
                     for idx, item in enumerate(selected):
@@ -499,26 +518,22 @@ if st.session_state.processed_payslips_data:
                                 
                         uploaded = False
                         
-                        # Check for the existence of the temporary file before attempting upload
                         file_path = item.get('temp_file_path')
                         if not file_path or not os.path.exists(file_path):
-                            item['upload_status_detail'] = "Failed: File missing from disk"
-                            add_to_log(f"{progress_prefix} ❌ Critical: Payslip file not found on disk for '{item['filename']}'. Skipping.", "error")
-                            # Keep selected=True and status=Final Failure to signal to user they need to re-process the PDF
-                            item['selected_for_upload'] = True
                             item['upload_status_detail'] = "Final Failure (Missing File)" 
-                            continue # Skip this item
+                            item['selected_for_upload'] = False # Auto-deselect if file is missing
+                            add_to_log(f"{progress_prefix} ❌ Critical: Payslip file not found on disk for '{item['filename']}'. Skipping.", "error")
+                            continue
                             
                         for attempt in range(1, MAX_RETRIES + 1):
                             try:
                                 add_to_log(f"{progress_prefix} 🚀 Uploading '{item['filename']}' (Attempt {attempt})...")
-                                
-                                # Pass the file path to the modified upload function
                                 file_id = upload_file_to_google_drive(service, item['filename'], file_path)
                                 
                                 item['upload_status_detail'] = f"Uploaded (ID: {file_id})"
-                                item['selected_for_upload'] = False # Deselect once successfully uploaded
+                                item['selected_for_upload'] = False 
                                 st.session_state.uploaded_file_keys_log.add(item['key'])
+                                
                                 try:
                                     with open(UPLOAD_LOG, "w") as f:
                                         json.dump(list(st.session_state.uploaded_file_keys_log), f)
@@ -526,7 +541,7 @@ if st.session_state.processed_payslips_data:
                                     add_to_log(f"CRITICAL: Could not save upload log to disk! {e}", "error")
                                 add_to_log(f"{progress_prefix} ✅ Success: '{item['filename']}'.", status="success")
                                 uploaded = True
-                                # After successful upload, remove the temp file
+                                
                                 try:
                                     os.remove(file_path) 
                                     del item['temp_file_path']
@@ -535,17 +550,14 @@ if st.session_state.processed_payslips_data:
                                 break 
                                 
                             except Exception as e:
-                                # Exponential Backoff Calculation
                                 wait_time = RETRY_DELAY * (2 ** (attempt - 1))
-                                if wait_time > 30: wait_time = 30 # Cap wait time at 30 seconds
+                                if wait_time > 30: wait_time = 30 
                                 
                                 if attempt < MAX_RETRIES:
                                     add_to_log(f"{progress_prefix} ⚠️ Failed attempt {attempt} for '{item['filename']}'. Retrying in {wait_time:.0f}s...", "warning")
                                     time.sleep(wait_time)
                                 else:
-                                    # Final failure: set a status for re-selection/resumption
                                     item['upload_status_detail'] = "Final Failure (Retry needed)"
-                                    # Keep selected for the next session
                                     item['selected_for_upload'] = True 
                                     add_to_log(f"{progress_prefix} ❌ Final upload failed for '{item['filename']}': {e}", "error")
                                     
@@ -558,13 +570,12 @@ if st.session_state.processed_payslips_data:
                             else: st.info(log['message'])
                     st.success("Google Drive upload process finished. See log for details.")
                 else: st.error("Google Drive authentication failed.")
-            # --- END UPLOAD RESILIENCE CHANGES ---
         else: st.info("Google Drive features are disabled.")
 
     with tab_download:
         if st.session_state.user_prefs.get("enable_local_download", True):
             
-            # MODIFIED: Reads from temp_file_path instead of file_bytes
+            # Reads from temp_file_path 
             def create_zip(items):
                 buf = io.BytesIO()
                 with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -573,7 +584,8 @@ if st.session_state.processed_payslips_data:
                         if 'filename' in item and path and os.path.exists(path):
                             try:
                                 with open(path, "rb") as f:
-                                    zf.writestr(item['filename'], f.read())
+                                    # Use the full unique filename
+                                    zf.writestr(item['filename'], f.read()) 
                             except Exception as e:
                                 add_to_log(f"Warning: Could not read temp file {path} for ZIP. {e}", "warning")
                 return buf.getvalue()
@@ -583,7 +595,7 @@ if st.session_state.processed_payslips_data:
             if st.session_state.processed_payslips_data: st.download_button("⬇️ Download All Processed (ZIP)", data=create_zip(st.session_state.processed_payslips_data), file_name="All_Processed_Payslips.zip", mime="application/zip")
         else: st.info("Local download is disabled.")
 
-    # Admin Sidebar
+    # Admin Sidebar (REMAINS UNCHANGED)
     st.sidebar.markdown("### 🔐 Admin Login")
     admin_pw = st.sidebar.text_input("Enter admin password", type="password", key="admin_pw")
     is_admin = admin_pw and admin_pw == st.secrets.get("admin_password", "admin")
