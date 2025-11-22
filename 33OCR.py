@@ -460,13 +460,17 @@ if uploaded_files:
         for i, uploaded_file in enumerate(uploaded_files):
             progress_bar_total.progress((i)/len(uploaded_files), text=f"Processing file {i+1}/{len(uploaded_files)}: **{uploaded_file.name}**")
             
+        for i, uploaded_file in enumerate(uploaded_files):
+            progress_bar_total.progress((i)/len(uploaded_files), text=f"Processing file {i+1}/{len(uploaded_files)}: **{uploaded_file.name}**")
+            
             # Create a clean prefix for unique identification
-            # Use original file name without extension, and slugify for safety
-            file_name_clean = slugify(os.path.splitext(uploaded_file.name)[0])
-
-            st.info(f"Starting processing of file {i+1}/{len(uploaded_files)}: **{uploaded_file.name}**")
-
-            file_name_clean = safe_slugify(uploaded_file.name) # ***UPDATED TO USE safe_slugify*** 
+            file_name_clean = safe_slugify(uploaded_file.name) # ***UPDATED TO USE safe_slugify***
+            
+            results = split_and_rename_pdf_dynamic(
+                uploaded_file.getvalue(),
+                ocr_mode=st.session_state.user_prefs.get("ocr_mode", "Hybrid"),
+                naming_pattern=st.session_state.user_prefs.get("naming_pattern", "{year} {month} {ippis}"),
+                original_file_prefix=file_name_clean) 
             
             all_processed_data.extend(results)
 
