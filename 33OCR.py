@@ -1,4 +1,4 @@
-# Code Hybrid - Unified & Modular (with Atomic Log Saving - PERSISTENT CLOUD LOG)
+# Code Hybrid - Unified & Modular (with Atomic Log Saving - PERSISTENT CLOUD LOG & Clean Filename)
 import os
 import io
 import re
@@ -22,21 +22,14 @@ from googleapiclient.errors import HttpError
 from pdf2image import convert_from_bytes
 import pytesseract
 
-# --- Custom Safe Slugify Function (Standard Library Only - FINAL FIX) ---
+# --- Custom Safe Slugify Function (Standard Library Only - Preserved for File Prefix in Log only) ---
 def safe_slugify(value, separator='_'):
     """
     Converts a string to a safe slug format using only standard Python libraries.
     """
-    # 1. Ensure value is a string and handle non-ASCII/whitespace
     value = str(value).strip().lower()
-    
-    # 2. Remove file extension if present (e.g., .pdf)
     value, _ = os.path.splitext(value)
-    
-    # 3. Replace non-alphanumeric characters (except spaces, hyphens, and underscores) with nothing
     value = re.sub(r'[^\w\s-]', '', value)
-    
-    # 4. Replace spaces, underscores, and multiple hyphens/separators with a single separator
     return re.sub(r'[-\s_]+', separator, value)
 # -----------------------------------------------------------------
 
@@ -155,7 +148,7 @@ st.markdown(
 )
 
 # -----------------------------
-# Google Drive helpers (UPDATED for Log Persistence)
+# Google Drive helpers (Persistent Log)
 # -----------------------------
 SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive']
 LOG_FILE_NAME = "uploaded_files.json"
@@ -181,6 +174,8 @@ def upload_file_to_google_drive(service, filename, file_path, mime_type="applica
     """Uploads a file reading from a local path, enabling resumable upload."""
     f = None
     try:
+        # Note: If duplicate filenames exist on Drive, this will upload a new file and not overwrite.
+        # Overwriting is handled by the application logic checking the persistent log key.
         file_metadata = {"name": filename, "parents": [GOOGLE_DRIVE_FOLDER_ID]}
         f = open(file_path, "rb")
         media = MediaIoBaseUpload(f, mimetype=mime_type, resumable=True) 
@@ -214,7 +209,6 @@ def update_or_create_log_file(service, log_data_list):
     """Updates the persistent log file on Google Drive or creates it if it doesn't exist."""
     
     if not GOOGLE_DRIVE_FOLDER_ID:
-        # Log is handled by add_to_log elsewhere, just return silently
         return
         
     log_content = json.dumps(list(log_data_list)).encode('utf-8')
@@ -297,7 +291,7 @@ def get_details_from_text(merged_text, group_idx=None, ocr_mode="Hybrid"):
     return None
 
 # -----------------------------
-# Core extraction / Grouping / Splitting (REMAINS UNCHANGED)
+# Core extraction / Grouping / Splitting (MODIFIED for Key/Filename)
 # -----------------------------
 def extract_text_from_pdf_non_ocr(reader):
     texts = []
@@ -373,13 +367,18 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
             info = {'status': "Details Missing", 'selected_for_upload': False, 'original_file_name': original_file_prefix}
             
             if details:
+                # 1. NEW LOGIC: Simplified Log Key (IPPIS/Month/Year only) for duplicate rejection
+                log_key = f"{details['year']}_{details['month']}_{details['ippis']}" 
+                # 2. NEW LOGIC: Clean Filename (No prefix/brackets)
                 core_filename = naming_pattern.format(**details)
+                
                 info.update({
                     **details,
-                    'key': f"{original_file_prefix}_{details['year']}_{details['month']}_{details['ippis']}_{g_idx}",
-                    'filename': f"[{original_file_prefix}] {core_filename}.pdf",
+                    'key': log_key,
+                    'filename': f"{core_filename}.pdf", # Reverted to clean filename
                     'status': "Details Extracted", 'selected_for_upload': True})
             else:
+                # Retain the original file prefix in the missing key just for debugging/uniqueness within the processing session
                 info.update({'key': f"{original_file_prefix}_no_details_group_{g_idx}", 'filename': f"[{original_file_prefix}] Payslip_Group_{g_idx}_missing_details.pdf"})
 
             buf = io.BytesIO(); writer.write(buf)
@@ -397,7 +396,7 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
         return []
 
 # -----------------------------
-# Session & Log Management (UPDATED FOR CLOUD PERSISTENCE)
+# Session & Log Management 
 # -----------------------------
 def add_to_log(message, status="info"):
     st.session_state.activity_log.insert(0, {"message": message, "status": status})
@@ -416,8 +415,6 @@ if 'activity_log' not in st.session_state: st.session_state.activity_log = []
 if 'new_file_uploaded' not in st.session_state: st.session_state.new_file_uploaded = False
 
 # --- LOG INITIALIZATION (USES GOOGLE DRIVE) ---
-# NOTE: Need to ensure this runs only once, but Streamlit's cache isn't available for credentials.
-# This pattern will run on every rerun, but is necessary to load the state correctly.
 if 'uploaded_file_keys_log' not in st.session_state:
     log_service = authenticate_google_drive()
     st.session_state.uploaded_file_keys_log = load_log_from_google_drive(log_service)
@@ -430,10 +427,7 @@ if 'uploaded_file_keys_log' not in st.session_state:
 st.markdown("""
 Upload **multiple** multi-page PDFs containing payslips.
 """)
-# --- VARIABLE DEFINITION (PLURAL) ---
 uploaded_files = st.file_uploader("📂 Upload PDF files containing payslips", type="pdf", accept_multiple_files=True, help="Drag & drop or click to browse multiple files")
-# -----------------------------------
-
 
 # New logic for uploaded file reset and cleanup (Uses list check)
 if uploaded_files and not st.session_state.new_file_uploaded:
@@ -460,11 +454,7 @@ if uploaded_files:
         for i, uploaded_file in enumerate(uploaded_files):
             progress_bar_total.progress((i)/len(uploaded_files), text=f"Processing file {i+1}/{len(uploaded_files)}: **{uploaded_file.name}**")
             
-        for i, uploaded_file in enumerate(uploaded_files):
-            progress_bar_total.progress((i)/len(uploaded_files), text=f"Processing file {i+1}/{len(uploaded_files)}: **{uploaded_file.name}**")
-            
-            # Create a clean prefix for unique identification
-            file_name_clean = safe_slugify(uploaded_file.name) # ***UPDATED TO USE safe_slugify***
+            file_name_clean = safe_slugify(uploaded_file.name)
             
             results = split_and_rename_pdf_dynamic(
                 uploaded_file.getvalue(),
@@ -479,8 +469,9 @@ if uploaded_files:
         st.session_state.processed_payslips_data = all_processed_data
 
         for item in st.session_state.processed_payslips_data:
-            if item.get('key') in st.session_state.uploaded_file_keys_log:
-                item['upload_status_detail'] = 'Already uploaded'
+            # Check for duplicate using the simplified key (IPPIS_Month_Year)
+            if item['status'] == 'Details Extracted' and item.get('key') in st.session_state.uploaded_file_keys_log:
+                item['upload_status_detail'] = 'Duplicate (Already uploaded)'
                 item['selected_for_upload'] = False
             elif item['status'] != "Details Extracted":
                 item['upload_status_detail'] = 'Pending'
@@ -503,7 +494,8 @@ if st.session_state.processed_payslips_data:
     col_sel_all, col_desel_all = st.columns(2)
     if col_sel_all.button("✅ Select All Valid for Upload / Retry", key="select_all"):
         for item in st.session_state.processed_payslips_data:
-            if item.get('upload_status_detail') != 'Already uploaded' and item['status'] == 'Details Extracted':
+            # Only select if extracted, not a duplicate, and not already marked Final Failure (Missing File)
+            if item['status'] == 'Details Extracted' and item.get('upload_status_detail') not in ['Duplicate (Already uploaded)', 'Already uploaded', 'Final Failure (Missing File)']:
                 item['selected_for_upload'] = True
     if col_desel_all.button("❌ Deselect All for Upload", key="deselect_all"):
         for item in st.session_state.processed_payslips_data: item['selected_for_upload'] = False
@@ -536,7 +528,6 @@ if st.session_state.processed_payslips_data:
                     log_placeholder = st.empty()
                     MAX_RETRIES, RETRY_DELAY = 5, 2 
                     
-                    # Store current keys before the batch upload starts
                     current_log_keys = st.session_state.uploaded_file_keys_log.copy()
                     log_update_needed = False
                     
@@ -561,11 +552,13 @@ if st.session_state.processed_payslips_data:
                         for attempt in range(1, MAX_RETRIES + 1):
                             try:
                                 add_to_log(f"{progress_prefix} 🚀 Uploading '{item['filename']}' (Attempt {attempt})...")
+                                
+                                # Upload happens here
                                 file_id = upload_file_to_google_drive(service, item['filename'], file_path)
                                 
                                 item['upload_status_detail'] = f"Uploaded (ID: {file_id})"
                                 item['selected_for_upload'] = False 
-                                current_log_keys.add(item['key']) # Update temporary log copy
+                                current_log_keys.add(item['key']) # Use the simplified key
                                 log_update_needed = True
                                 
                                 add_to_log(f"{progress_prefix} ✅ Success: '{item['filename']}'.", status="success")
@@ -593,7 +586,7 @@ if st.session_state.processed_payslips_data:
                     # --- CRITICAL PERSISTENCE STEP ---
                     if log_update_needed:
                         update_or_create_log_file(service, current_log_keys)
-                        st.session_state.uploaded_file_keys_log = current_log_keys # Update session state with new keys
+                        st.session_state.uploaded_file_keys_log = current_log_keys 
                     # ---------------------------------
                     
                     add_to_log(f"🏁 Batch upload process complete. Processed {total_to_upload} selected files.", "info")
