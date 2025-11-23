@@ -1,4 +1,4 @@
-# Code Hybrid - Unified & Modular (with Atomic Log Saving - PERSISTENT CLOUD LOG & Clean Filename)
+# Code Hybrid - Unified & Modular (with Atomic Log Saving - PERSISTENT CLOUD LOG & Atomic Persistence)
 import os
 import io
 import re
@@ -22,7 +22,7 @@ from googleapiclient.errors import HttpError
 from pdf2image import convert_from_bytes
 import pytesseract
 
-# --- Custom Safe Slugify Function (Standard Library Only - Preserved for File Prefix in Log only) ---
+# --- Custom Safe Slugify Function (Standard Library Only) ---
 def safe_slugify(value, separator='_'):
     """
     Converts a string to a safe slug format using only standard Python libraries.
@@ -174,8 +174,7 @@ def upload_file_to_google_drive(service, filename, file_path, mime_type="applica
     """Uploads a file reading from a local path, enabling resumable upload."""
     f = None
     try:
-        # Note: If duplicate filenames exist on Drive, this will upload a new file and not overwrite.
-        # Overwriting is handled by the application logic checking the persistent log key.
+        # Note: We rely on the log key check to prevent duplicates, so we use files().create
         file_metadata = {"name": filename, "parents": [GOOGLE_DRIVE_FOLDER_ID]}
         f = open(file_path, "rb")
         media = MediaIoBaseUpload(f, mimetype=mime_type, resumable=True) 
@@ -367,18 +366,17 @@ def split_and_rename_pdf_dynamic(input_pdf_bytes, ocr_mode="Hybrid", naming_patt
             info = {'status': "Details Missing", 'selected_for_upload': False, 'original_file_name': original_file_prefix}
             
             if details:
-                # 1. NEW LOGIC: Simplified Log Key (IPPIS/Month/Year only) for duplicate rejection
+                # NEW LOGIC: Simplified Log Key (IPPIS/Month/Year only)
                 log_key = f"{details['year']}_{details['month']}_{details['ippis']}" 
-                # 2. NEW LOGIC: Clean Filename (No prefix/brackets)
                 core_filename = naming_pattern.format(**details)
                 
                 info.update({
                     **details,
                     'key': log_key,
-                    'filename': f"{core_filename}.pdf", # Reverted to clean filename
+                    'filename': f"{core_filename}.pdf", # Clean Filename
                     'status': "Details Extracted", 'selected_for_upload': True})
             else:
-                # Retain the original file prefix in the missing key just for debugging/uniqueness within the processing session
+                # Retain a unique key for missing details (just for in-session management)
                 info.update({'key': f"{original_file_prefix}_no_details_group_{g_idx}", 'filename': f"[{original_file_prefix}] Payslip_Group_{g_idx}_missing_details.pdf"})
 
             buf = io.BytesIO(); writer.write(buf)
@@ -529,7 +527,6 @@ if st.session_state.processed_payslips_data:
                     MAX_RETRIES, RETRY_DELAY = 5, 2 
                     
                     current_log_keys = st.session_state.uploaded_file_keys_log.copy()
-                    log_update_needed = False
                     
                     for idx, item in enumerate(selected):
                         progress_prefix = f"({idx + 1}/{total_to_upload})"
@@ -558,9 +555,14 @@ if st.session_state.processed_payslips_data:
                                 
                                 item['upload_status_detail'] = f"Uploaded (ID: {file_id})"
                                 item['selected_for_upload'] = False 
-                                current_log_keys.add(item['key']) # Use the simplified key
-                                log_update_needed = True
+                                current_log_keys.add(item['key']) 
                                 
+                                # --- CRITICAL PERSISTENCE STEP (IN-LOOP) ---
+                                # Save the log immediately upon a single successful upload
+                                update_or_create_log_file(service, current_log_keys)
+                                st.session_state.uploaded_file_keys_log = current_log_keys.copy() # Update session state immediately
+                                # -------------------------------------------
+
                                 add_to_log(f"{progress_prefix} ✅ Success: '{item['filename']}'.", status="success")
                                 uploaded = True
                                 
@@ -583,11 +585,7 @@ if st.session_state.processed_payslips_data:
                                     item['selected_for_upload'] = True 
                                     add_to_log(f"{progress_prefix} ❌ Final upload failed for '{item['filename']}': {e}", "error")
                     
-                    # --- CRITICAL PERSISTENCE STEP ---
-                    if log_update_needed:
-                        update_or_create_log_file(service, current_log_keys)
-                        st.session_state.uploaded_file_keys_log = current_log_keys 
-                    # ---------------------------------
+                    # NOTE: The final log saving block after the loop is now gone, as persistence is in-loop.
                     
                     add_to_log(f"🏁 Batch upload process complete. Processed {total_to_upload} selected files.", "info")
                     with log_placeholder.expander("Live Activity Log", expanded=True):
